@@ -132,6 +132,7 @@ desktop.ini
 .directory
 
 # Test outputs
+flink_project/tests/*
 flink_project/tests/output/
 flink_project/tests/temp/
 test_output/
