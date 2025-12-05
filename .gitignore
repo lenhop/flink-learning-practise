@@ -1,0 +1,163 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv
+conda-env/
+.conda/
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# Python Environment
+.python-version
+Pipfile.lock
+__pypackages__/
+
+# Python Tools
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Logs
+logs/
+*.log
+*.log.*
+log/
+
+# Flink
+# Checkpoints and Savepoints
+checkpoints/
+savepoints/
+*.checkpoint
+*.savepoint
+
+# Flink runtime files
+flink-*.log
+flink-*.out
+*.pid
+
+# Flink job artifacts (exclude JARs in lib directory)
+*.jar
+!lib/*.jar
+
+# Flink state backend
+state/
+
+# Flink temp files
+tmp/
+temp/
+*.tmp
+
+# Config files with sensitive data
+config/*.env
+config/*.local.*
+config/*.secret.*
+*.secret
+*.key
+*.pem
+*.p12
+*.jks
+
+# Project specific config
+flink_project/config/*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+*.lnk
+.directory
+
+# Test outputs
+flink_project/tests/output/
+flink_project/tests/temp/
+test_output/
+test_results/
+
+# Data files (if large, exclude but allow test data)
+*.csv
+*.jsonl
+*.parquet
+!**/test_data/*.csv
+!**/test_data/*.jsonl
+
+# Temporary files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Documentation builds
+docs/_build/
+/site
