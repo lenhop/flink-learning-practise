@@ -112,7 +112,7 @@ config/*.secret.*
 *.jks
 
 # Project specific config
-flink_project/config/*
+flink_project/config/*.yml
 
 # Database
 *.db
