@@ -1,0 +1,7 @@
+
+init_config:
+  scheam:
+    - name: ods
+    - name: dws
+  table:
+    - name: ods.walmart_order

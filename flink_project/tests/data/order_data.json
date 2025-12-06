@@ -1,5 +1,0 @@
-{"order_id": "1001", "user_id": "U001", "amount": 99.99, "items": [{"id": "I001", "name": "Product A", "price": 49.99, "quantity": 1}, {"id": "I002", "name": "Product B", "price": 25.00, "quantity": 2}], "timestamp": "2024-01-15 14:30:00"}
-{"order_id": "1002", "user_id": "U002", "amount": 149.50, "items": [{"id": "I003", "name": "Product C", "price": 149.50, "quantity": 1}], "timestamp": "2024-01-15 14:35:00"}
-{"order_id": "1003", "user_id": "U003", "amount": 75.25, "items": [{"id": "I004", "name": "Product D", "price": 25.00, "quantity": 3}], "timestamp": "2024-01-15 14:40:00"}
-{"order_id": "1004", "user_id": "U001", "amount": 200.00, "items": [{"id": "I005", "name": "Product E", "price": 100.00, "quantity": 2}], "timestamp": "2024-01-15 14:45:00"}
-{"order_id": "1005", "user_id": "U004", "amount": 299.99, "items": [{"id": "I006", "name": "Product F", "price": 299.99, "quantity": 1}], "timestamp": "2024-01-15 14:50:00"}
