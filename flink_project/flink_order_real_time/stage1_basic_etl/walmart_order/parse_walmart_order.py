@@ -368,6 +368,170 @@ def parse_walmart_order_json_string(json_str: str, source_file: Optional[str] = 
         return []
 
 
+def convert_to_row_data(order_dict: dict) -> tuple:
+    """
+    Convert order dictionary to tuple for MySQL insertion
+    Field types must match SQL table structure exactly:
+    - BIGINT -> int/long
+    - INT -> int
+    - DECIMAL(10,2) -> float
+    - VARCHAR/TEXT -> str (or None)
+    - TIMESTAMP -> datetime (or None)
+    
+    Args:
+        order_dict: Parsed order dictionary
+        
+    Returns:
+        Tuple of values matching SQL table column types
+    """
+    def parse_timestamp(ts_str):
+        """Parse timestamp string to datetime object"""
+        if ts_str is None:
+            return None
+        try:
+            return datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+        except:
+            return None
+    
+    def to_bigint(value):
+        """Convert value to BIGINT (int/long)"""
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+    
+    def to_int(value):
+        """Convert value to INT"""
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+    
+    def to_decimal(value):
+        """Convert value to DECIMAL(10,2) (float)"""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+    
+    def to_string(value, max_length=None):
+        """Convert value to string, optionally truncate"""
+        if value is None:
+            return None
+        str_value = str(value)
+        if max_length and len(str_value) > max_length:
+            return str_value[:max_length]
+        return str_value
+    
+    # Return tuple matching SQL table column order and types
+    return (
+        # Order basic information (BIGINT, BIGINT, VARCHAR, BIGINT, TIMESTAMP)
+        to_bigint(order_dict.get('purchaseOrderId')),           # BIGINT
+        to_bigint(order_dict.get('customerOrderId')),           # BIGINT
+        to_string(order_dict.get('customerEmailId'), 100),      # VARCHAR(100)
+        to_bigint(order_dict.get('orderDate')),                 # BIGINT
+        parse_timestamp(order_dict.get('orderDate_formatted')),  # TIMESTAMP
+        
+        # Ship node information (VARCHAR, VARCHAR, VARCHAR)
+        to_string(order_dict.get('shipNode_type'), 50),         # VARCHAR(50)
+        to_string(order_dict.get('shipNode_name'), 100),        # VARCHAR(100)
+        to_string(order_dict.get('shipNode_id'), 50),          # VARCHAR(50)
+        
+        # Data source information (VARCHAR, VARCHAR)
+        to_string(order_dict.get('source_file'), 100),         # VARCHAR(100)
+        to_string(order_dict.get('phone'), 20),                # VARCHAR(20)
+        
+        # Estimated delivery information (BIGINT, TIMESTAMP, BIGINT, TIMESTAMP, VARCHAR)
+        to_bigint(order_dict.get('estimatedDeliveryDate')),   # BIGINT
+        parse_timestamp(order_dict.get('estimatedDeliveryDate_formatted')),  # TIMESTAMP
+        to_bigint(order_dict.get('estimatedShipDate')),        # BIGINT
+        parse_timestamp(order_dict.get('estimatedShipDate_formatted')),      # TIMESTAMP
+        to_string(order_dict.get('methodCode'), 50),           # VARCHAR(50)
+        
+        # Recipient address information (VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+        to_string(order_dict.get('recipient_name'), 100),      # VARCHAR(100)
+        to_string(order_dict.get('address1'), 200),            # VARCHAR(200)
+        to_string(order_dict.get('address2'), 200),           # VARCHAR(200)
+        to_string(order_dict.get('city'), 100),                # VARCHAR(100)
+        to_string(order_dict.get('state'), 50),                # VARCHAR(50)
+        to_string(order_dict.get('postalCode'), 20),           # VARCHAR(20)
+        to_string(order_dict.get('country'), 10),              # VARCHAR(10)
+        to_string(order_dict.get('addressType'), 20),          # VARCHAR(20)
+        
+        # Order line item information (INT, VARCHAR, TEXT, VARCHAR, INT, VARCHAR)
+        to_int(order_dict.get('lineNumber')),                  # INT
+        to_string(order_dict.get('sku'), 50),                  # VARCHAR(50)
+        to_string(order_dict.get('productName')),              # TEXT (no length limit)
+        to_string(order_dict.get('product_condition'), 50),    # VARCHAR(50)
+        to_int(order_dict.get('quantity')),                    # INT
+        to_string(order_dict.get('unitOfMeasurement'), 20),   # VARCHAR(20)
+        
+        # Order status information (BIGINT, TIMESTAMP, VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+        to_bigint(order_dict.get('statusDate')),                # BIGINT
+        parse_timestamp(order_dict.get('statusDate_formatted')), # TIMESTAMP
+        to_string(order_dict.get('fulfillmentOption'), 50),    # VARCHAR(50)
+        to_string(order_dict.get('shipMethod'), 50),           # VARCHAR(50)
+        to_string(order_dict.get('storeId'), 50),              # VARCHAR(50)
+        to_string(order_dict.get('shippingProgramType'), 50),  # VARCHAR(50)
+        
+        # Charge information (VARCHAR, VARCHAR, DECIMAL(10,2), VARCHAR, DECIMAL(10,2), VARCHAR)
+        to_string(order_dict.get('chargeType'), 50),           # VARCHAR(50)
+        to_string(order_dict.get('chargeName'), 100),          # VARCHAR(100)
+        to_decimal(order_dict.get('chargeAmount')),            # DECIMAL(10,2)
+        to_string(order_dict.get('currency'), 10),             # VARCHAR(10)
+        to_decimal(order_dict.get('taxAmount')),               # DECIMAL(10,2)
+        to_string(order_dict.get('taxName'), 50),              # VARCHAR(50)
+        
+        # Order line status information (VARCHAR, INT, VARCHAR)
+        to_string(order_dict.get('orderLineStatus'), 50),      # VARCHAR(50)
+        to_int(order_dict.get('statusQuantity')),              # INT
+        to_string(order_dict.get('cancellationReason'), 200),  # VARCHAR(200)
+        
+        # Shipping information (BIGINT, TIMESTAMP, VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+        to_bigint(order_dict.get('shipDateTime')),             # BIGINT
+        parse_timestamp(order_dict.get('shipDateTime_formatted')), # TIMESTAMP
+        to_string(order_dict.get('carrierName'), 100),         # VARCHAR(100)
+        to_string(order_dict.get('carrierMethodCode'), 50),     # VARCHAR(50)
+        to_string(order_dict.get('trackingNumber'), 100),      # VARCHAR(100)
+        to_string(order_dict.get('trackingURL'), 500)          # VARCHAR(500)
+    )
+
+
+def parse_walmart_order_json_string_to_tuples(json_str: str, source_file: Optional[str] = None) -> List[tuple]:
+    """
+    Parse Walmart order JSON string and convert directly to tuples for MySQL insertion
+    This function combines parse_walmart_order_json_string and convert_to_row_data
+    
+    Args:
+        json_str: JSON string of a single order or list of orders
+        source_file: Optional source file name for tracking
+        
+    Returns:
+        List of tuples (one tuple per order line, 50 fields each)
+        Each tuple matches SQL table column types exactly
+        
+    Note:
+        This function is designed for Flink streaming processing.
+        It parses JSON and converts directly to tuple format, skipping intermediate Dict format.
+    """
+    # Step 1: Parse JSON string to get List[Dict]
+    parsed_orders = parse_walmart_order_json_string(json_str, source_file)
+    
+    # Step 2: Convert each Dict to tuple
+    result = []
+    for order_dict in parsed_orders:
+        tuple_data = convert_to_row_data(order_dict)
+        result.append(tuple_data)
+    
+    return result
+
+
 if __name__ == "__main__":
     # Set JSON file paths
     json_file_paths = [

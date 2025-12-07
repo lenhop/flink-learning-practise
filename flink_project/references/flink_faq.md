@@ -192,3 +192,19 @@ table_env.execute_sql("CREATE TABLE sink_table (...) WITH (...)")
 table_env.execute_sql("INSERT INTO sink_table SELECT * FROM source_table")
 ```
 
+
+
+
+
+Flink 是否一定要用 jar 文件才能连接 kafka 和 mysql
+
+
+经常遇到  版本兼容性问题：
+
+- PyFlink 2.2.0 与提供的 Flink Kafka连接器版本不匹配
+- JAR文件版本（1.17.1, 3.3.0-1.20）与PyFlink 2.2.0存在兼容性冲突
+- PyFlink 2.2.0使用较旧的API，而新版本Kafka连接器需要更新的API
+- KafkaSource 类在PyFlink 2.2.0中不可用或实现方式不同
+- JVM无法找到所需的Java类，如 org.apache.flink.connector.kafka.source.KafkaSource
+- PyFlink 2.2.0 与 JDBC连接器版本（3.1.1-1.17, 3.3.0-1.20） 存在兼容性问题
+- JdbcSink 、 JdbcConnectionOptions 等类在JVM中无法加载

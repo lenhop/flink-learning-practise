@@ -103,7 +103,8 @@ stage1_basic_etl/
 
 ## 5. 日志文件
 
-所有脚本的日志文件保存在各模块的 `logs/` 目录下：
-- `walmart_order/logs/request_order_and_push_kafka.log`
-- `walmart_order/logs/flink_walmart_order_pipeline.log`
+所有脚本的日志文件统一保存在项目根目录的 `logs/` 目录下：
+- `logs/request_order_and_push_kafka.log`
+- `logs/flink_walmart_order_pipeline.log`
+- `logs/walmart_order_requester.log`
 

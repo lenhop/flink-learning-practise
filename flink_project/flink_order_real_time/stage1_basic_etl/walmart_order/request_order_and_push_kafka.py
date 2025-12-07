@@ -34,7 +34,8 @@ from stage1_basic_etl.walmart_order.request_walmart_order import WalmartOrderReq
 
 # Configure logger
 # Create logs directory if it doesn't exist
-log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+# Use flink_project root directory for logs
+log_dir = os.path.join(flink_project_path, 'logs')
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
@@ -438,8 +439,8 @@ if __name__ == "__main__":
         # logger.info(f"Processing result: {stats}")
         
         # Example: Process date range
-        start_date_str = "2025-10-01"
-        end_date_str = "2025-10-01"
+        start_date_str = "2025-11-01"
+        end_date_str = "2025-11-01"
         overall_stats = pusher.request_and_push_date_range(start_date_str, end_date_str)
         logger.info(f"Overall processing result: {overall_stats}")
         

@@ -89,10 +89,6 @@ flink-*.log
 flink-*.out
 *.pid
 
-# Flink job artifacts (exclude JARs in lib directory)
-*.jar
-!lib/*.jar
-
 # Flink state backend
 state/
 
@@ -114,6 +110,7 @@ config/*.secret.*
 # Project specific config
 flink_project/config/*.yml
 flink_project/config/*.yaml
+flink_project/data/*
 
 # Database
 *.db

@@ -42,9 +42,11 @@ Flink 数据源工具类 - Source Utils
 import json
 from typing import List, Dict, Optional, Callable
 from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.datastream.connectors.kafka import KafkaSource, KafkaOffsetsInitializer
-from pyflink.common.watermark_strategy import WatermarkStrategy
+from pyflink.datastream.connectors import KafkaSource
+from pyflink.datastream.connectors.kafka import KafkaOffsetsInitializer
 from pyflink.common.serialization import SimpleStringSchema
+from pyflink.common.typeinfo import Types
+from pyflink.common import WatermarkStrategy
 from pyflink.table import TableEnvironment, EnvironmentSettings
 
 
@@ -96,44 +98,34 @@ class FlinkSourceUtils:
             ...     bootstrap_servers=["localhost:29092"],
             ...     offset="earliest"
             ... )
-            >>> data_stream = env.from_source(
-            ...     kafka_source,
-            ...     WatermarkStrategy.no_watermarks(),
-            ...     "kafka-source"
-            ... )
+            >>> data_stream = env.from_source(kafka_source, WatermarkStrategy.no_watermarks(), "Kafka Source")
         """
         if not isinstance(bootstrap_servers, list):
             bootstrap_servers = [bootstrap_servers]
-
-        # 配置 Kafka Source 属性
-        kafka_props = {
-            'bootstrap.servers': ','.join(bootstrap_servers),
-            'group.id': group_id or f"flink-consumer-{topic}",
-        }
-        kafka_props.update(kwargs)
-
-        # 配置 offset 策略
-        if offset == "earliest":
-            offset_initializer = KafkaOffsetsInitializer.earliest()
-        elif offset == "latest":
-            offset_initializer = KafkaOffsetsInitializer.latest()
-        else:
-            offset_initializer = KafkaOffsetsInitializer.earliest()
 
         # 配置反序列化器
         if deserializer is None:
             deserializer = SimpleStringSchema()
 
-        # 创建 Kafka Source
-        kafka_source = KafkaSource.builder() \
-            .set_bootstrap_servers(','.join(bootstrap_servers)) \
-            .set_topics(topic) \
-            .set_value_only_deserializer(deserializer) \
-            .set_starting_offsets(offset_initializer) \
-            .set_properties(kafka_props) \
-            .build()
+        # 创建 Kafka Source Builder
+        builder = KafkaSource.builder()
+        builder.set_bootstrap_servers(','.join(bootstrap_servers))
+        builder.set_topics(topic)
+        builder.set_group_id(group_id or f"flink-consumer-{topic}")
+        builder.set_value_only_deserializer(deserializer)
+        
+        # Set starting offsets
+        if offset == "latest":
+            builder.set_starting_offsets(KafkaOffsetsInitializer.latest())
+        else:
+            builder.set_starting_offsets(KafkaOffsetsInitializer.earliest())
 
-        return kafka_source
+        # 添加其他配置
+        for key, value in kwargs.items():
+            builder.set_property(key, value)
+
+        # 构建并返回 Kafka Source
+        return builder.build()
 
     def create_kafka_table_source_ddl(
         self,

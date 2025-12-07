@@ -232,40 +232,128 @@ class FlinkSinkUtils:
             ... )
             >>> data_stream.add_sink(mysql_sink)
         """
-        # 配置 JDBC 连接选项
-        jdbc_connection_options = JdbcConnectionOptions.JdbcConnectionOptionsBuilder() \
-            .with_url(url) \
-            .with_driver_name(driver) \
-            .with_user_name(username) \
-            .with_password(password) \
-            .build()
-
-        # 配置执行选项
-        jdbc_execution_options = JdbcExecutionOptions.builder() \
-            .with_batch_size(batch_size) \
-            .with_batch_interval_ms(batch_interval_ms) \
-            .with_max_retries(max_retries) \
-            .build()
-
-        # 创建 JDBC Sink
-        # 如果未提供 type_info, 使用默认类型 (需要根据实际数据调整)
-        if type_info is None:
-            # 默认类型: 根据 SQL 中的占位符数量推断
-            # 注意: 这是一个简化的实现, 实际使用时应该明确指定类型
-            placeholder_count = sql.count('?')
-            if placeholder_count == 0:
-                raise ValueError("SQL statement must contain at least one placeholder (?)")
-            # 默认使用 STRING 类型, 实际使用时需要根据字段类型调整
-            type_info = Types.ROW([Types.STRING()] * placeholder_count)
+        try:
+            # 如果未提供 type_info, 使用默认类型
+            if type_info is None:
+                placeholder_count = sql.count('?')
+                if placeholder_count == 0:
+                    raise ValueError("SQL statement must contain at least one placeholder (?)")
+                type_info = Types.ROW([Types.STRING()] * placeholder_count)
+            
+            # 尝试使用标准JDBC Sink创建方法
+            try:
+                mysql_sink = JdbcSink.sink(
+                    sql,
+                    type_info,
+                    JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
+                        .with_url(url)
+                        .with_driver_name(driver)
+                        .with_user_name(username)
+                        .with_password(password)
+                        .build(),
+                    JdbcExecutionOptions.builder()
+                        .with_batch_size(batch_size)
+                        .with_batch_interval_ms(batch_interval_ms)
+                        .with_max_retries(max_retries)
+                        .build()
+                )
+                return mysql_sink
+            except Exception as e1:
+                print(f"Standard JDBC sink creation failed: {str(e1)}")
+                
+                # 尝试使用更简单的方法
+                try:
+                    mysql_sink = JdbcSink.sink(
+                        sql,
+                        type_info,
+                        JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
+                            .with_url(url)
+                            .with_driver_name(driver)
+                            .with_user_name(username)
+                            .with_password(password)
+                            .build()
+                    )
+                    return mysql_sink
+                except Exception as e2:
+                    print(f"Simplified JDBC sink creation failed: {str(e2)}")
+                    
+                    # 使用自定义Python MySQL Sink
+                    print("Using custom Python MySQL Sink...")
+                    return self._create_python_mysql_sink(url, username, password, table_name, sql)
+                    
+        except Exception as e:
+            print(f"Error creating JDBC sink: {str(e)}")
+            raise
+    
+    def _create_python_mysql_sink(self, url, username, password, table_name, sql):
+        """
+        创建基于Python原生mysql.connector的MySQL Sink函数
         
-        mysql_sink = JdbcSink.sink(
-            sql,
-            type_info,
-            jdbc_connection_options,
-            jdbc_execution_options
-        )
-
-        return mysql_sink
+        当JDBC连接器不可用时使用此方法
+        """
+        try:
+            import mysql.connector
+            from mysql.connector import Error
+            
+            def mysql_sink_func(value):
+                """MySQL Sink函数"""
+                try:
+                    # 解析URL
+                    if "jdbc:mysql://" in url:
+                        # JDBC格式: jdbc:mysql://host:port/database
+                        url_parts = url.replace("jdbc:mysql://", "").split("/")
+                        host_port = url_parts[0].split(":")
+                        host = host_port[0]
+                        port = int(host_port[1]) if len(host_port) > 1 else 3306
+                        database = url_parts[1] if len(url_parts) > 1 else ""
+                    else:
+                        # 直接MySQL格式: host:port/database
+                        url_parts = url.split("/")
+                        host_port = url_parts[0].split(":")
+                        host = host_port[0]
+                        port = int(host_port[1]) if len(host_port) > 1 else 3306
+                        database = url_parts[1] if len(url_parts) > 1 else ""
+                    
+                    # 连接数据库
+                    connection = mysql.connector.connect(
+                        host=host,
+                        port=port,
+                        database=database,
+                        user=username,
+                        password=password,
+                        autocommit=True
+                    )
+                    cursor = connection.cursor()
+                    
+                    # 将数据转换为适合SQL的参数格式
+                    if hasattr(value, '__iter__') and not isinstance(value, str):
+                        params = tuple(value)
+                    else:
+                        params = (value,)
+                    
+                    # 执行SQL
+                    cursor.execute(sql, params)
+                    connection.commit()
+                    
+                    print(f"✓ Inserted record: {params}")
+                    
+                    # 关闭连接
+                    cursor.close()
+                    connection.close()
+                    
+                except Error as e:
+                    print(f"✗ MySQL error inserting record: {str(e)}")
+                except Exception as e:
+                    print(f"✗ Unexpected error inserting record: {str(e)}")
+            
+            return mysql_sink_func
+            
+        except ImportError:
+            print("✗ mysql-connector-python not installed. Please install: pip install mysql-connector-python")
+            raise
+        except Exception as e:
+            print(f"✗ Error creating Python MySQL Sink: {str(e)}")
+            raise
 
     def create_mysql_table_sink_ddl(
         self,

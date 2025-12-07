@@ -2,15 +2,28 @@ import requests
 import json
 import time
 import os
+import sys
 import logging
 from datetime import datetime, timedelta
 
+# Add flink_project directory to path
+flink_project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
+if flink_project_path not in sys.path:
+    sys.path.insert(0, flink_project_path)
+
 # Configure logger
+# Create logs directory if it doesn't exist
+# Use flink_project root directory for logs
+log_dir = os.path.join(flink_project_path, 'logs')
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+log_file = os.path.join(log_dir, 'walmart_order_requester.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'walmart_order_requester.log')),
+        logging.FileHandler(log_file),
         logging.StreamHandler()
     ]
 )
