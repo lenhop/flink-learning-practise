@@ -5,6 +5,7 @@ import os
 import sys
 import logging
 from datetime import datetime, timedelta
+import pytz
 
 # Add flink_project directory to path
 flink_project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -277,7 +278,7 @@ class WalmartOrderRequester:
     def get_orders_with_auto_split(self, access_token, start_date, end_date, ship_node_type=None, limit=200):
         """Get orders for a time range with automatic time splitting
         
-        Splits the time range into 24 hours. If any hour returns more than limit orders,
+        Splits the time range into hourly chunks. If any hour returns more than limit orders,
         that hour is further split into 6 chunks of 10 minutes each.
         
         Args:
@@ -298,19 +299,38 @@ class WalmartOrderRequester:
         start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
         end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
         
-        # Split into 24 hours
-        hour_chunks = self._split_time_range(start_dt, end_dt, 24)
+        # Calculate total duration in hours
+        total_duration = end_dt - start_dt
+        total_hours = total_duration.total_seconds() / 3600
+        
+        # Split into hourly chunks (not fixed 24, but based on actual duration)
+        # For each hour, create a chunk
+        hourly_chunks = []
+        current_start = start_dt
+        hour_idx = 0
+        
+        while current_start < end_dt:
+            # Calculate end of current hour
+            current_end = current_start + timedelta(hours=1)
+            if current_end > end_dt:
+                current_end = end_dt
+            hourly_chunks.append((current_start, current_end))
+            current_start = current_end
+            hour_idx += 1
         
         all_order_list = []
         all_order_details = {}
         overall_status = "SUCCESS"
         
-        for hour_idx, (hour_start, hour_end) in enumerate(hour_chunks):
+        for hour_idx, (hour_start, hour_end) in enumerate(hourly_chunks):
             hour_start_str = hour_start.strftime("%Y-%m-%dT%H:%M:%SZ")
             hour_end_str = hour_end.strftime("%Y-%m-%dT%H:%M:%SZ")
             
+            # Calculate duration of this hour chunk
+            hour_duration = (hour_end - hour_start).total_seconds() / 60  # in minutes
+            
             # Progress bar for hourly requests
-            progress = f"Processing hour {hour_idx+1}/24: {hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')}"
+            progress = f"Processing hour {hour_idx+1}/{len(hourly_chunks)}: {hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')} ({hour_duration:.1f} minutes)"
             logger.info(progress)
             
             # Request orders for this hour
@@ -328,15 +348,18 @@ class WalmartOrderRequester:
             
             # If status is NEED_SPLIT, split hour into 6 chunks of 10 minutes
             if status == "NEED_SPLIT":
-                logger.info(f"Hour {hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')} needs splitting into 10-minute chunks")
+                logger.info(f"Hour {hour_start.strftime('%H:%M')} - {hour_end.strftime('%H:%M')} has more than {limit} orders, splitting into 6 chunks of 10 minutes")
                 ten_minute_chunks = self._split_time_range(hour_start, hour_end, 6)
                 
                 for chunk_idx, (chunk_start, chunk_end) in enumerate(ten_minute_chunks):
                     chunk_start_str = chunk_start.strftime("%Y-%m-%dT%H:%M:%SZ")
                     chunk_end_str = chunk_end.strftime("%Y-%m-%dT%H:%M:%SZ")
                     
+                    # Calculate duration of this 10-minute chunk
+                    chunk_duration = (chunk_end - chunk_start).total_seconds() / 60
+                    
                     # Progress bar for 10-minute chunks
-                    chunk_progress = f"  Processing chunk {chunk_idx+1}/6: {chunk_start.strftime('%H:%M')} - {chunk_end.strftime('%H:%M')}"
+                    chunk_progress = f"  Processing 10-minute chunk {chunk_idx+1}/6: {chunk_start.strftime('%H:%M')} - {chunk_end.strftime('%H:%M')} ({chunk_duration:.1f} minutes)"
                     logger.info(chunk_progress)
                     
                     chunk_orders, chunk_details, chunk_status = self.get_orders_for_time_range(
@@ -352,7 +375,7 @@ class WalmartOrderRequester:
                         continue
                     elif chunk_status == "NEED_SPLIT":
                         # Still too many orders, skip this chunk
-                        logger.warning(f"Chunk {chunk_start.strftime('%H:%M')} - {chunk_end.strftime('%H:%M')} still has too many orders, skipping")
+                        logger.warning(f"10-minute chunk {chunk_start.strftime('%H:%M')} - {chunk_end.strftime('%H:%M')} still has too many orders (>{limit}), skipping")
                         continue
                     elif chunk_status == "SUCCESS":
                         # Merge chunk orders
@@ -394,6 +417,191 @@ class WalmartOrderRequester:
             tuple: (order_list, order_details_dict, status)
         """
         return self.get_orders_for_time_range(access_token, start_date, end_date, ship_node_type)
+
+
+def request_orders_by_date_range(start_date_str: str, end_date_str: str, account_tag: str = 'eForCity'):
+    """
+    Request orders by date range (loop through each day)
+    
+    Args:
+        start_date_str: Start date in format YYYYMMDD (e.g., 20251101)
+        end_date_str: End date in format YYYYMMDD (e.g., 20251102)
+        account_tag: Walmart account tag (default: 'eForCity')
+    
+    Returns:
+        List of order dictionaries
+    """
+    # Add stage1_basic_etl parent directory to path for token generator import
+    stage1_parent_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+    if stage1_parent_path not in sys.path:
+        sys.path.insert(0, stage1_parent_path)
+    
+    from stage1_basic_etl.token_generator.walmart_access_token_generator import WalmartAccessTokenGenerator
+    
+    # Parse date strings
+    start_date = datetime.strptime(start_date_str, '%Y%m%d')
+    end_date = datetime.strptime(end_date_str, '%Y%m%d')
+    
+    # Initialize requester and token generator
+    requester = WalmartOrderRequester()
+    token_generator = WalmartAccessTokenGenerator()
+    
+    all_orders = []
+    all_order_details = {}
+    
+    # Loop through each day
+    current_date = start_date
+    while current_date <= end_date:
+        # Set time range for the day (00:00:00 to 23:59:59 PST)
+        pst_timezone = pytz.timezone('America/Los_Angeles')
+        
+        # Start of day in PST
+        day_start_pst = pst_timezone.localize(
+            datetime(current_date.year, current_date.month, current_date.day, 0, 0, 0)
+        )
+        # End of day in PST
+        day_end_pst = pst_timezone.localize(
+            datetime(current_date.year, current_date.month, current_date.day, 23, 59, 59)
+        )
+        
+        # Convert to UTC for API
+        day_start_utc = day_start_pst.astimezone(pytz.UTC)
+        day_end_utc = day_end_pst.astimezone(pytz.UTC)
+        
+        # Format for API
+        start_date_api = day_start_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_date_api = day_end_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        logger.info(f"\n{'='*80}")
+        logger.info(f"Requesting orders for date: {current_date.strftime('%Y-%m-%d')}")
+        logger.info(f"PST Time: {day_start_pst.strftime('%Y-%m-%d %H:%M:%S %Z')} to {day_end_pst.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        logger.info(f"UTC Time (API): {start_date_api} to {end_date_api}")
+        logger.info(f"{'='*80}")
+        
+        try:
+            # Get access token
+            token_result = token_generator.generate_access_token(account_tag)
+            # Token generator returns {account_tag: response.json()}
+            # response.json() contains: access_token, token_type, expires_in
+            token_data = token_result.get(account_tag, {})
+            access_token = token_data.get('access_token')
+            
+            if not access_token:
+                logger.error(f"Error: No access token received for account {account_tag}")
+                current_date += timedelta(days=1)
+                continue
+            
+            # Request orders for the day
+            order_list, order_details_dict, status = requester.get_orders_with_auto_split(
+                access_token=access_token,
+                start_date=start_date_api,
+                end_date=end_date_api,
+                ship_node_type=None,  # Request all types
+                limit=200
+            )
+            
+            if status == "SUCCESS":
+                logger.info(f"✓ Successfully retrieved {len(order_list)} orders for {current_date.strftime('%Y-%m-%d')}")
+                all_orders.extend(order_list)
+                all_order_details.update(order_details_dict)
+            else:
+                logger.error(f"✗ Failed to retrieve orders for {current_date.strftime('%Y-%m-%d')}: {status}")
+        
+        except Exception as e:
+            logger.error(f"✗ Error requesting orders for {current_date.strftime('%Y-%m-%d')}: {str(e)}")
+        
+        # Move to next day
+        current_date += timedelta(days=1)
+    
+    logger.info(f"\n{'='*80}")
+    logger.info(f"Total orders retrieved: {len(all_orders)}")
+    logger.info(f"Total order details: {len(all_order_details)}")
+    logger.info(f"{'='*80}\n")
+    
+    # Convert order details to list format for parsing
+    orders_for_parsing = list(all_order_details.values()) if all_order_details else all_orders
+    
+    return orders_for_parsing
+
+
+def request_orders_by_hours(hours: int, account_tag: str = 'eForCity'):
+    """
+    Request orders for the last N hours (PST time)
+    
+    Args:
+        hours: Number of hours to look back (PST time)
+        account_tag: Walmart account tag (default: 'eForCity')
+    
+    Returns:
+        List of order dictionaries
+    """
+    # Add stage1_basic_etl parent directory to path for token generator import
+    stage1_parent_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+    if stage1_parent_path not in sys.path:
+        sys.path.insert(0, stage1_parent_path)
+    
+    from stage1_basic_etl.token_generator.walmart_access_token_generator import WalmartAccessTokenGenerator
+    
+    # Set timezone to PST
+    pst_timezone = pytz.timezone('America/Los_Angeles')
+    
+    # Get current time in PST
+    pst_now = datetime.now(pst_timezone)
+    
+    # Calculate N hours ago
+    pst_n_hours_ago = pst_now - timedelta(hours=hours)
+    
+    # Convert to UTC for API
+    pst_now_utc = pst_now.astimezone(pytz.UTC)
+    pst_n_hours_ago_utc = pst_n_hours_ago.astimezone(pytz.UTC)
+    
+    # Format for API
+    start_date_api = pst_n_hours_ago_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+    end_date_api = pst_now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    logger.info(f"\n{'='*80}")
+    logger.info(f"Requesting orders for last {hours} hours (PST time)")
+    logger.info(f"PST Time: {pst_n_hours_ago.strftime('%Y-%m-%d %H:%M:%S %Z')} to {pst_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    logger.info(f"UTC Time (API): {start_date_api} to {end_date_api}")
+    logger.info(f"{'='*80}\n")
+    
+    # Initialize requester and token generator
+    requester = WalmartOrderRequester()
+    token_generator = WalmartAccessTokenGenerator()
+    
+    try:
+        # Get access token
+        token_result = token_generator.generate_access_token(account_tag)
+        # Token generator returns {account_tag: response.json()}
+        # response.json() contains: access_token, token_type, expires_in
+        token_data = token_result.get(account_tag, {})
+        access_token = token_data.get('access_token')
+        
+        if not access_token:
+            logger.error(f"Error: No access token received for account {account_tag}")
+            return []
+        
+        # Request orders
+        order_list, order_details_dict, status = requester.get_orders_with_auto_split(
+            access_token=access_token,
+            start_date=start_date_api,
+            end_date=end_date_api,
+            ship_node_type=None,  # Request all types
+            limit=200
+        )
+        
+        if status == "SUCCESS":
+            logger.info(f"✓ Successfully retrieved {len(order_list)} orders")
+            # Convert order details to list format for parsing
+            orders_for_parsing = list(order_details_dict.values()) if order_details_dict else order_list
+            return orders_for_parsing
+        else:
+            logger.error(f"✗ Failed to retrieve orders: {status}")
+            return []
+    
+    except Exception as e:
+        logger.error(f"✗ Error requesting orders: {str(e)}")
+        return []
 
 
 # Test example

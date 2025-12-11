@@ -1,8 +1,19 @@
 import json
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
+import sys
+import argparse
+import pytz
 from typing import List, Dict, Optional
+
+# Add flink_project directory to path
+flink_project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
+if flink_project_path not in sys.path:
+    sys.path.insert(0, flink_project_path)
+
+# Note: This file only contains parsing functions for Walmart orders
+# Request functions are in request_walmart_order.py
 
 def parse_walmart_order(json_file_path):
     """
@@ -505,7 +516,7 @@ def convert_to_row_data(order_dict: dict) -> tuple:
         
         # Data processing information (DATETIME, DATETIME)
         parse_timestamp(order_dict.get('request_time')),       # DATETIME - request time
-        None                                                    # DATETIME - load_time (default CURRENT_TIMESTAMP)
+        datetime.now()                                         # DATETIME - load_time (current timestamp when record is loaded)
     )
 
 
@@ -538,37 +549,91 @@ def parse_walmart_order_json_string_to_tuples(json_str: str, source_file: Option
     return result
 
 
-if __name__ == "__main__":
-    # Set JSON file paths
-    json_file_paths = [
-        "/Users/hzz/KMS/flink-learning-practise/flink_project/flink_order_real_time/stage1_basic_etl/walmart_order/walmart_order_2025-10-01.json",
-        "/Users/hzz/KMS/flink-learning-practise/flink_project/flink_order_real_time/stage1_basic_etl/walmart_order/walmart_order_2025-10-02.json",
-        "/Users/hzz/KMS/flink-learning-practise/flink_project/flink_order_real_time/stage1_basic_etl/walmart_order/walmart_order_2025-10-03.json"
-    ]
+def main():
+    """
+    Main function for parsing Walmart order JSON files
     
-    # Parse order data
+    This script only handles parsing of Walmart order data.
+    For requesting orders from API, use request_walmart_order.py functions.
+    """
+    parser = argparse.ArgumentParser(
+        description='Parse Walmart order JSON files',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Parse a single JSON file
+  python parse_walmart_order.py -f walmart_order_20251101.json -o output.csv
+  
+  # Parse multiple JSON files
+  python parse_walmart_order.py -f file1.json file2.json -o output.csv
+        """
+    )
+    
+    parser.add_argument('-f', '--file', type=str, nargs='+', metavar='FILE',
+                       help='Input JSON file path(s) to parse')
+    parser.add_argument('-o', '--output', type=str, metavar='FILE',
+                       help='Output CSV file path (optional)')
+    
+    args = parser.parse_args()
+    
+    # Validate arguments
+    if not args.file:
+        parser.error("--file (-f) is required. Specify at least one JSON file to parse.")
+    
+    # Parse orders from files
+    print(f"\n{'='*80}")
+    print("Parsing Walmart order JSON files...")
+    print(f"{'='*80}\n")
+    
     try:
-        order_df = parse_multiple_walmart_orders(json_file_paths)
+        # Parse multiple files
+        if len(args.file) == 1:
+            # Single file
+            json_file = args.file[0]
+            if not os.path.exists(json_file):
+                print(f"Error: File not found: {json_file}")
+                return
+            
+            print(f"Parsing file: {json_file}")
+            order_df = parse_walmart_order(json_file)
+        else:
+            # Multiple files
+            print(f"Parsing {len(args.file)} files...")
+            order_df = parse_multiple_walmart_orders(args.file)
         
-        # Display DataFrame information
-        print(f"\nParsing completed, total {len(order_df)} rows of data")
-        print("\nDataFrame columns:")
+        if order_df.empty:
+            print("No orders parsed. Exiting.")
+            return
+        
+        # Display results
+        print(f"\n{'='*80}")
+        print(f"Parsing completed, total {len(order_df)} rows of data")
+        print(f"{'='*80}\n")
+        
+        print("DataFrame columns:")
         print(order_df.columns.tolist())
+        print()
         
-        # Display first 5 rows
-        print("\nFirst 5 rows:")
+        print("First 5 rows:")
         print(order_df.head())
+        print()
         
-        # Group by source file and count
-        if 'source_file' in order_df.columns:
-            print("\nData volume by source file:")
-            print(order_df['source_file'].value_counts())
-        
-        # Save to CSV file (optional)
-        output_dir = os.path.dirname(json_file_paths[0])
-        output_csv = os.path.join(output_dir, "walmart_orders_combined_parsed.csv")
-        order_df.to_csv(output_csv, index=False, encoding='utf-8')
-        print(f"\nData saved to: {output_csv}")
-        
+        # Save to CSV if output file specified
+        if args.output:
+            order_df.to_csv(args.output, index=False, encoding='utf-8')
+            print(f"Data saved to: {args.output}\n")
+        else:
+            # Save to default location
+            output_dir = os.path.dirname(os.path.abspath(__file__))
+            output_csv = os.path.join(output_dir, f"walmart_orders_parsed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            order_df.to_csv(output_csv, index=False, encoding='utf-8')
+            print(f"Data saved to: {output_csv}\n")
+    
     except Exception as e:
         print(f"Error occurred during parsing: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()

@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import logging
+import argparse
 from datetime import datetime, timedelta
 import pytz
 
@@ -375,8 +376,9 @@ class WalmartOrderKafkaPusher:
                 logger.info(f"Processing chunk {chunk_idx}/{len(hourly_chunks)}: {chunk_start.strftime('%Y-%m-%d %H:%M:%S')} to {chunk_end.strftime('%Y-%m-%d %H:%M:%S')} ({duration_minutes:.1f} minutes)")
                 
                 try:
-                    # Request orders for this chunk
-                    chunk_orders, chunk_details, status = self.order_requester.get_orders_for_time_range(
+                    # Request orders for this chunk using auto_split to handle large volumes
+                    # This will automatically split into smaller chunks if needed
+                    chunk_orders, chunk_details, status = self.order_requester.get_orders_with_auto_split(
                         access_token=access_token,
                         start_date=chunk_start_str,
                         end_date=chunk_end_str,
@@ -389,8 +391,8 @@ class WalmartOrderKafkaPusher:
                         logger.warning("Access token expired, refreshing...")
                         access_token = self._get_access_token(force_refresh=True)
                         
-                        # Retry request
-                        chunk_orders, chunk_details, status = self.order_requester.get_orders_for_time_range(
+                        # Retry request with auto_split
+                        chunk_orders, chunk_details, status = self.order_requester.get_orders_with_auto_split(
                             access_token=access_token,
                             start_date=chunk_start_str,
                             end_date=chunk_end_str,
@@ -412,10 +414,11 @@ class WalmartOrderKafkaPusher:
                         if overall_status == "SUCCESS":
                             overall_status = status
                         continue
+                    # Note: get_orders_with_auto_split handles NEED_SPLIT internally,
+                    # so we shouldn't see NEED_SPLIT status here
+                    # If we do, it means auto_split failed, log warning
                     elif status == "NEED_SPLIT":
-                        # If chunk needs split, it means too many orders
-                        # For now, we'll log a warning and continue
-                        logger.warning(f"Chunk {chunk_idx} has too many orders (NEED_SPLIT), but continuing with available data")
+                        logger.warning(f"Chunk {chunk_idx} still needs split after auto_split, this shouldn't happen")
                         # Still merge available orders
                         for order in chunk_orders:
                             order_id = order.get('purchaseOrderId')
@@ -605,53 +608,155 @@ class WalmartOrderKafkaPusher:
 
 # Main execution
 if __name__ == "__main__":
-    logger.info("Walmart Order Request and Push to Kafka" + " -" * 100)
+    parser = argparse.ArgumentParser(
+        description='Request Walmart orders and push to Kafka',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Request orders for a date range (processes day by day)
+  python request_order_and_push_kafka.py -s 20251111 -e 20251111
+  
+  # Request orders for last N hours (PST time)
+  python request_order_and_push_kafka.py -H 2
+  
+  # Request orders for specific time range
+  python request_order_and_push_kafka.py -s "2025-11-11 00:00:00" -e "2025-11-11 23:59:59"
+        """
+    )
+    
+    # Create mutually exclusive group for date range and hours
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument('-s', '--start-date', type=str, metavar='YYYYMMDD or YYYY-MM-DD',
+                       help='Start date in format YYYYMMDD (e.g., 20251111) or YYYY-MM-DD. Requires -e/--end-date')
+    group.add_argument('-H', '--hours', type=int, metavar='N',
+                       help='Request orders for last N hours (PST time)')
+    
+    parser.add_argument('-e', '--end-date', type=str, metavar='YYYYMMDD or YYYY-MM-DD',
+                       help='End date in format YYYYMMDD (e.g., 20251111) or YYYY-MM-DD. Required with -s/--start-date')
+    parser.add_argument('-a', '--account-tag', type=str, default='eForCity',
+                       help='Walmart account tag (default: eForCity)')
+    parser.add_argument('-t', '--topic', type=str, default='walmart_order_raw',
+                       help='Kafka topic name (default: walmart_order_raw)')
+    parser.add_argument('--ship-node-type', type=str, choices=['SellerFulfilled', 'WFSFulfilled', '3PLFulfilled'],
+                       help='Ship node type (optional, requests all types if not specified)')
+    
+    args = parser.parse_args()
+    
+    # Validate arguments
+    if args.start_date and not args.end_date:
+        parser.error("--start-date (-s) requires --end-date (-e)")
     
     # Initialize pusher
     pusher = WalmartOrderKafkaPusher(
-        account_tag='eForCity',
-        kafka_topic='walmart_order_raw',
+        account_tag=args.account_tag,
+        kafka_topic=args.topic,
         bootstrap_servers=['localhost:29092', 'localhost:39092']
     )
     
     try:
-        # Get orders from last 1 hour in Los Angeles timezone
-        # Set timezone to America/Los_Angeles (Pacific Time)
-        la_timezone = pytz.timezone('America/Los_Angeles')
-        
-        # Get current time in Los Angeles timezone
-        la_now = datetime.now(la_timezone)
-        
-        # Calculate 1 hour ago
-        la_1_hour_ago = la_now - timedelta(hours=1)
-        
-        # Convert to UTC for Walmart API (API expects UTC time in ISO format)
-        # Walmart API uses UTC timezone, so we need to convert LA time to UTC
-        la_now_utc = la_now.astimezone(pytz.UTC)
-        la_1_hour_ago_utc = la_1_hour_ago.astimezone(pytz.UTC)
-        
-        # Format for Walmart API: "YYYY-MM-DDTHH:MM:SSZ"
-        start_date = la_1_hour_ago_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
-        end_date = la_now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
-        
-        logger.info("=" * 100)
-        logger.info("Requesting orders from last 1 hour")
-        logger.info(f"Los Angeles Time: {la_1_hour_ago.strftime('%Y-%m-%d %H:%M:%S %Z')} to {la_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        logger.info(f"UTC Time (API format): {start_date} to {end_date}")
-        logger.info("=" * 100)
-        
-        # Request and push orders
-        stats = pusher.request_and_push_orders(
-            start_date=start_date,
-            end_date=end_date,
-            ship_node_type=None,  # Request all types
-            limit=200
-        )
+        if args.start_date:
+            # Mode 1: Date range
+            # Parse date format (support both YYYYMMDD and YYYY-MM-DD)
+            try:
+                # Try YYYYMMDD format first
+                start_date_obj = datetime.strptime(args.start_date, '%Y%m%d')
+                end_date_obj = datetime.strptime(args.end_date, '%Y%m%d')
+                start_date_str = start_date_obj.strftime('%Y-%m-%d')
+                end_date_str = end_date_obj.strftime('%Y-%m-%d')
+            except ValueError:
+                # Try YYYY-MM-DD format
+                try:
+                    start_date_obj = datetime.strptime(args.start_date, '%Y-%m-%d')
+                    end_date_obj = datetime.strptime(args.end_date, '%Y-%m-%d')
+                    start_date_str = args.start_date
+                    end_date_str = args.end_date
+                except ValueError:
+                    # Try datetime format
+                    start_date_str = args.start_date
+                    end_date_str = args.end_date
+            
+            logger.info("=" * 100)
+            logger.info("Walmart Order Request and Push to Kafka - Date Range Mode")
+            logger.info(f"Start Date: {start_date_str}")
+            logger.info(f"End Date: {end_date_str}")
+            logger.info(f"Account Tag: {args.account_tag}")
+            logger.info(f"Ship Node Type: {args.ship_node_type or 'All types'}")
+            logger.info("=" * 100)
+            
+            # Use request_and_push_date_range which processes day by day
+            stats = pusher.request_and_push_date_range(
+                start_date_str=start_date_str,
+                end_date_str=end_date_str,
+                ship_node_type=args.ship_node_type
+            )
+            
+        elif args.hours:
+            # Mode 2: Recent hours
+            la_timezone = pytz.timezone('America/Los_Angeles')
+            la_now = datetime.now(la_timezone)
+            la_n_hours_ago = la_now - timedelta(hours=args.hours)
+            
+            # Convert to UTC for Walmart API
+            la_now_utc = la_now.astimezone(pytz.UTC)
+            la_n_hours_ago_utc = la_n_hours_ago.astimezone(pytz.UTC)
+            
+            # Format for Walmart API
+            start_date = la_n_hours_ago_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+            end_date = la_now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+            
+            logger.info("=" * 100)
+            logger.info("Walmart Order Request and Push to Kafka - Recent Hours Mode")
+            logger.info(f"Hours: {args.hours}")
+            logger.info(f"Los Angeles Time: {la_n_hours_ago.strftime('%Y-%m-%d %H:%M:%S %Z')} to {la_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            logger.info(f"UTC Time (API format): {start_date} to {end_date}")
+            logger.info(f"Account Tag: {args.account_tag}")
+            logger.info(f"Ship Node Type: {args.ship_node_type or 'All types'}")
+            logger.info("=" * 100)
+            
+            # Request and push orders
+            stats = pusher.request_and_push_orders(
+                start_date=start_date,
+                end_date=end_date,
+                ship_node_type=args.ship_node_type,
+                limit=200
+            )
+        else:
+            # Default: Last 1 hour (backward compatibility)
+            la_timezone = pytz.timezone('America/Los_Angeles')
+            la_now = datetime.now(la_timezone)
+            la_1_hour_ago = la_now - timedelta(hours=1)
+            
+            la_now_utc = la_now.astimezone(pytz.UTC)
+            la_1_hour_ago_utc = la_1_hour_ago.astimezone(pytz.UTC)
+            
+            start_date = la_1_hour_ago_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+            end_date = la_now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+            
+            logger.info("=" * 100)
+            logger.info("Walmart Order Request and Push to Kafka - Default Mode (Last 1 Hour)")
+            logger.info(f"Los Angeles Time: {la_1_hour_ago.strftime('%Y-%m-%d %H:%M:%S %Z')} to {la_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            logger.info(f"UTC Time (API format): {start_date} to {end_date}")
+            logger.info("=" * 100)
+            
+            stats = pusher.request_and_push_orders(
+                start_date=start_date,
+                end_date=end_date,
+                ship_node_type=None,
+                limit=200
+            )
         
         logger.info("=" * 100)
         logger.info("Processing completed!")
-        logger.info(f"Orders requested: {stats.get('orders_requested', 0)}")
-        logger.info(f"Orders pushed: {stats.get('orders_pushed', 0)}")
+        if isinstance(stats, dict):
+            if 'total_orders_requested' in stats:
+                # Date range mode
+                logger.info(f"Total orders requested: {stats.get('total_orders_requested', 0)}")
+                logger.info(f"Total orders pushed: {stats.get('total_orders_pushed', 0)}")
+                logger.info(f"Days processed: {stats.get('days_processed', 0)}")
+            else:
+                # Single time range mode
+                logger.info(f"Orders requested: {stats.get('orders_requested', 0)}")
+                logger.info(f"Orders pushed: {stats.get('orders_pushed', 0)}")
         if stats.get('errors'):
             logger.warning(f"Errors: {stats.get('errors')}")
         logger.info("=" * 100)
