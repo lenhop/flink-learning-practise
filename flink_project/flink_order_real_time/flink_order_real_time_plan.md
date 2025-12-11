@@ -16,23 +16,33 @@
 
 ## 阶段划分
 
-### 阶段1: 基础 ETL - 数据流转 (Week 1)
+### 阶段1: 基础 ETL - 数据流转和转换 (Week 1-2)
 
 **学习目标**:
 - Flink 基础概念和环境搭建
 - Kafka Source 和 JDBC Sink 的使用
-- 简单的数据流转
+- 数据流转和转换操作
+- 数据清洗和验证
+- 错误数据处理
 
 **实现功能**:
 1. 从 Kafka 读取订单原始数据
 2. 解析 JSON 数据
-3. 写入 MySQL 订单表
+3. 数据清洗（去除无效数据、格式转换）
+4. 数据验证（订单金额校验、状态校验）
+5. 数据拆分（订单主表和明细表分离）
+6. 写入 MySQL 订单表
+7. 错误数据记录到日志或死信队列
 
 **Flink 功能点**:
 - StreamExecutionEnvironment
 - KafkaSource
 - JdbcSink
 - 基本的数据类型转换
+- MapFunction / FlatMapFunction
+- FilterFunction
+- 自定义函数（UDF）
+- 侧输出流（Side Output）处理错误数据
 
 **文件结构**:
 ```
@@ -40,6 +50,9 @@ flink_order_real_time/
 ├── stage1_basic_etl/
 │   ├── order_producer.py          # 模拟订单 API，发送数据到 Kafka
 │   ├── flink_order_etl.py         # Flink ETL 主程序
+│   ├── order_transformer.py       # 数据转换主程序
+│   ├── order_validator.py         # 数据验证函数
+│   ├── order_splitter.py          # 订单拆分逻辑
 │   └── README.md                  # 阶段说明文档
 ├── sql/
 │   └── create_tables.sql          # 创建数据库表结构
@@ -50,45 +63,13 @@ flink_order_real_time/
 **预期输出**:
 - 订单数据成功从 Kafka 流转到 MySQL
 - 理解 Flink 的基本数据流处理
-
----
-
-### 阶段2: 数据转换和清洗 (Week 2)
-
-**学习目标**:
-- Flink 数据转换操作（map, filter, flatMap）
-- 数据清洗和验证
-- 错误数据处理
-
-**实现功能**:
-1. 数据清洗（去除无效数据、格式转换）
-2. 数据验证（订单金额校验、状态校验）
-3. 数据拆分（订单主表和明细表分离）
-4. 错误数据记录到日志或死信队列
-
-**Flink 功能点**:
-- MapFunction / FlatMapFunction
-- FilterFunction
-- 自定义函数（UDF）
-- 侧输出流（Side Output）处理错误数据
-
-**文件结构**:
-```
-stage2_data_transformation/
-├── order_transformer.py            # 数据转换主程序
-├── order_validator.py              # 数据验证函数
-├── order_splitter.py               # 订单拆分逻辑
-└── README.md
-```
-
-**预期输出**:
 - 清洗后的订单数据写入 MySQL
 - 错误数据单独处理
 - 订单主表和明细表正确分离
 
 ---
 
-### 阶段3: 窗口操作和实时统计 (Week 3)
+### 阶段2: 窗口操作和实时统计 (Week 3)
 
 **学习目标**:
 - Flink 窗口操作（时间窗口、计数窗口）
@@ -110,7 +91,7 @@ stage2_data_transformation/
 
 **文件结构**:
 ```
-stage3_window_statistics/
+stage2_window_statistics/
 ├── order_statistics.py             # 实时统计主程序
 ├── window_aggregators.py           # 窗口聚合函数
 ├── real_time_dashboard.py          # 实时统计结果输出
@@ -131,7 +112,7 @@ stage3_window_statistics/
 
 ---
 
-### 阶段4: 状态管理和复杂事件处理 (Week 4)
+### 阶段3: 状态管理和复杂事件处理 (Week 4)
 
 **学习目标**:
 - Flink 状态管理（KeyedState, OperatorState）
@@ -154,7 +135,7 @@ stage3_window_statistics/
 
 **文件结构**:
 ```
-stage4_state_cep/
+stage3_state_cep/
 ├── order_state_machine.py          # 订单状态机
 ├── order_anomaly_detector.py       # 异常订单检测
 ├── order_cep_processor.py          # CEP 复杂事件处理
@@ -232,21 +213,19 @@ flink_order_real_time/
 │   └── flink_config.yml            # Flink 配置
 ├── sql/
 │   └── create_tables.sql           # 数据库表结构
-├── stage1_basic_etl/               # 阶段1：基础 ETL
+├── stage1_basic_etl/               # 阶段1：基础 ETL 和数据转换
 │   ├── order_producer.py
 │   ├── flink_order_etl.py
-│   └── README.md
-├── stage2_data_transformation/     # 阶段2：数据转换
 │   ├── order_transformer.py
 │   ├── order_validator.py
 │   ├── order_splitter.py
 │   └── README.md
-├── stage3_window_statistics/        # 阶段3：窗口统计
+├── stage2_window_statistics/        # 阶段2：窗口统计
 │   ├── order_statistics.py
 │   ├── window_aggregators.py
 │   ├── real_time_dashboard.py
 │   └── README.md
-├── stage4_state_cep/                # 阶段4：状态和 CEP
+├── stage3_state_cep/                # 阶段3：状态和 CEP
 │   ├── order_state_machine.py
 │   ├── order_anomaly_detector.py
 │   ├── order_cep_processor.py
@@ -263,30 +242,28 @@ flink_order_real_time/
 
 ## 学习路径
 
-### Week 1: 基础入门
-- Day 1-2: 环境搭建和基础概念
-- Day 3-4: 实现阶段1基础 ETL
-- Day 5: 测试和文档整理
-
-### Week 2: 数据转换
-- Day 1-2: 学习 Flink 转换操作
-- Day 3-4: 实现阶段2数据清洗
-- Day 5: 优化和测试
+### Week 1-2: 基础 ETL 和数据转换
+- Week 1 Day 1-2: 环境搭建和基础概念
+- Week 1 Day 3-4: 实现基础数据流转（Kafka → Flink → MySQL）
+- Week 1 Day 5: 测试和文档整理
+- Week 2 Day 1-2: 学习 Flink 转换操作（map, filter, flatMap）
+- Week 2 Day 3-4: 实现数据清洗、验证和拆分
+- Week 2 Day 5: 优化和测试
 
 ### Week 3: 窗口和统计
 - Day 1-2: 学习窗口操作和 Watermark
-- Day 3-4: 实现阶段3实时统计
+- Day 3-4: 实现阶段2实时统计
 - Day 5: 性能优化
 
 ### Week 4: 高级功能
 - Day 1-2: 学习状态管理和 CEP
-- Day 3-4: 实现阶段4复杂处理
+- Day 3-4: 实现阶段3复杂处理
 - Day 5: 项目总结和文档
 
 ## 预期成果
 
 1. **代码成果**:
-   - 4 个阶段的完整代码实现
+   - 3 个阶段的完整代码实现
    - 可运行的 Flink 作业
    - 完整的测试用例
 
@@ -304,7 +281,7 @@ flink_order_real_time/
 
 1. 创建项目目录结构
 2. 初始化数据库表结构
-3. 实现阶段1基础 ETL
+3. 实现阶段1基础 ETL 和数据转换
 4. 逐步完成后续阶段
 
 ## 参考资料

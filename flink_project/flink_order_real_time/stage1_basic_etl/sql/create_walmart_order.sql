@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS ods.walmart_order (
     carrierName VARCHAR(100) COMMENT 'Carrier name',
     carrierMethodCode VARCHAR(50) COMMENT 'Carrier method code',
     trackingNumber VARCHAR(100) COMMENT 'Tracking number',
-    trackingURL VARCHAR(500) COMMENT 'Tracking URL'
+    trackingURL VARCHAR(500) COMMENT 'Tracking URL',
+    
+    -- Data processing information
+    request_time DATETIME COMMENT 'Request time when order was fetched from API',
+    load_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'Load time when record was inserted into database',
+    
+    PRIMARY KEY (purchaseOrderId, sku)
 )
 COMMENT 'Walmart order table';

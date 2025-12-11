@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 from datetime import datetime, timedelta
+import pytz
 
 # Add flink_project directory to path to import config and utils
 flink_project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
@@ -90,6 +91,78 @@ class WalmartOrderKafkaPusher:
         # Token cache
         self.access_token = None
         self.token_expires_at = None
+    
+    def _parse_date_input(self, date_input):
+        """
+        Parse date input and convert to API format (UTC)
+        
+        Args:
+            date_input (str): Date string in format:
+                - "yyyy-MM-dd" -> Convert to "yyyy-MM-ddT00:00:00Z" or "yyyy-MM-ddT23:59:59Z"
+                - "yyyy-MM-dd hh:mm:ss" -> Convert to "yyyy-MM-ddThh:mm:ssZ"
+        
+        Returns:
+            tuple: (datetime_obj, is_full_day)
+                - datetime_obj: datetime object in UTC
+                - is_full_day: True if input is date only, False if datetime
+        """
+        try:
+            # Try to parse as date only (yyyy-MM-dd)
+            try:
+                dt = datetime.strptime(date_input, "%Y-%m-%d")
+                is_full_day = True
+            except ValueError:
+                # Try to parse as datetime (yyyy-MM-dd hh:mm:ss)
+                try:
+                    dt = datetime.strptime(date_input, "%Y-%m-%d %H:%M:%S")
+                    is_full_day = False
+                except ValueError:
+                    # Try to parse as datetime with timezone (yyyy-MM-ddTHH:MM:SSZ)
+                    try:
+                        dt = datetime.fromisoformat(date_input.replace('Z', '+00:00'))
+                        is_full_day = False
+                    except ValueError:
+                        raise ValueError(f"Invalid date format: {date_input}. Expected 'yyyy-MM-dd' or 'yyyy-MM-dd hh:mm:ss' or 'yyyy-MM-ddTHH:MM:SSZ'")
+            
+            # Convert to UTC if not already
+            if dt.tzinfo is None:
+                # Assume local timezone, convert to UTC
+                dt = pytz.UTC.localize(dt)
+            else:
+                dt = dt.astimezone(pytz.UTC)
+            
+            return dt, is_full_day
+        except Exception as e:
+            raise ValueError(f"Error parsing date input '{date_input}': {str(e)}")
+    
+    def _split_into_hourly_chunks(self, start_dt, end_dt):
+        """
+        Split time range into hourly chunks
+        
+        Args:
+            start_dt (datetime): Start datetime in UTC
+            end_dt (datetime): End datetime in UTC
+        
+        Returns:
+            list: List of (start_datetime, end_datetime) tuples in UTC
+        """
+        chunks = []
+        current_start = start_dt
+        
+        while current_start < end_dt:
+            # Calculate end of current hour
+            current_end = current_start.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            
+            # If current_end exceeds end_dt, use end_dt
+            if current_end > end_dt:
+                current_end = end_dt
+            
+            chunks.append((current_start, current_end))
+            
+            # Move to next hour
+            current_start = current_end
+        
+        return chunks
     
     def _ensure_kafka_topic(self):
         """Ensure Kafka topic exists, create if not"""
@@ -223,15 +296,27 @@ class WalmartOrderKafkaPusher:
             raise
     
     def request_and_push_orders(self, start_date, end_date, ship_node_type=None, 
-                                auto_split=True, limit=200):
+                                limit=200):
         """
         Request orders for a time range and push to Kafka
+        Supports two input formats:
+        - "yyyy-MM-dd": Request full day (00:00:00 to 23:59:59)
+        - "yyyy-MM-dd hh:mm:ss": Request specific time range
+        - "yyyy-MM-ddTHH:MM:SSZ": API format (UTC)
+        
+        Time range will be split into hourly chunks for processing.
+        If time range is less than 1 hour, use original time range.
         
         Args:
-            start_date (str): Start date string in format "YYYY-MM-DDTHH:MM:SSZ"
-            end_date (str): End date string in format "YYYY-MM-DDTHH:MM:SSZ"
+            start_date (str): Start date string in format:
+                - "yyyy-MM-dd" -> Full day from 00:00:00
+                - "yyyy-MM-dd hh:mm:ss" -> Specific start time
+                - "yyyy-MM-ddTHH:MM:SSZ" -> API format (UTC)
+            end_date (str): End date string in format:
+                - "yyyy-MM-dd" -> Full day to 23:59:59
+                - "yyyy-MM-dd hh:mm:ss" -> Specific end time
+                - "yyyy-MM-ddTHH:MM:SSZ" -> API format (UTC)
             ship_node_type (str, optional): Ship node type, values: SellerFulfilled, WFSFulfilled, 3PLFulfilled
-            auto_split (bool): Whether to use auto-split for large time ranges (default: True)
             limit (int): Maximum number of orders per request (default: 200)
             
         Returns:
@@ -249,66 +334,133 @@ class WalmartOrderKafkaPusher:
             # Ensure Kafka topic exists
             self._ensure_kafka_topic()
             
-            # Get access token
-            access_token = self._get_access_token()
+            # Parse input dates
+            start_dt, start_is_full_day = self._parse_date_input(start_date)
+            end_dt, end_is_full_day = self._parse_date_input(end_date)
             
-            # Request orders
-            logger.info(f"Requesting orders from {start_date} to {end_date}")
+            # If input is date only (yyyy-MM-dd), set to full day
+            if start_is_full_day:
+                start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            if end_is_full_day:
+                end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
             
-            if auto_split:
-                order_list, order_details, status = self.order_requester.get_orders_with_auto_split(
-                    access_token=access_token,
-                    start_date=start_date,
-                    end_date=end_date,
-                    ship_node_type=ship_node_type,
-                    limit=limit
-                )
-            else:
-                order_list, order_details, status = self.order_requester.get_orders_for_time_range(
-                    access_token=access_token,
-                    start_date=start_date,
-                    end_date=end_date,
-                    ship_node_type=ship_node_type,
-                    limit=limit
-                )
-            
-            # Handle token expiration
-            if status == "TOKEN_EXPIRED":
-                logger.warning("Access token expired, refreshing...")
-                access_token = self._get_access_token(force_refresh=True)
-                
-                # Retry request
-                if auto_split:
-                    order_list, order_details, status = self.order_requester.get_orders_with_auto_split(
-                        access_token=access_token,
-                        start_date=start_date,
-                        end_date=end_date,
-                        ship_node_type=ship_node_type,
-                        limit=limit
-                    )
-                else:
-                    order_list, order_details, status = self.order_requester.get_orders_for_time_range(
-                        access_token=access_token,
-                        start_date=start_date,
-                        end_date=end_date,
-                        ship_node_type=ship_node_type,
-                        limit=limit
-                    )
-            
-            # Check status
-            if status.startswith("ERROR"):
-                error_msg = f"Failed to request orders: {status}"
+            # Validate time range
+            if start_dt >= end_dt:
+                error_msg = f"Invalid time range: start_date ({start_dt}) must be before end_date ({end_dt})"
                 logger.error(error_msg)
                 stats['errors'].append(error_msg)
                 return stats
             
-            stats['orders_requested'] = len(order_list)
-            logger.info(f"Successfully requested {len(order_list)} orders")
+            logger.info("=" * 100)
+            logger.info(f"Requesting orders from {start_dt.strftime('%Y-%m-%d %H:%M:%S UTC')} to {end_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            logger.info("=" * 100)
+            
+            # Split into hourly chunks
+            hourly_chunks = self._split_into_hourly_chunks(start_dt, end_dt)
+            logger.info(f"Time range split into {len(hourly_chunks)} hourly chunk(s)")
+            
+            # Get access token
+            access_token = self._get_access_token()
+            
+            # Process each hourly chunk
+            all_order_list = []
+            all_order_details = {}
+            overall_status = "SUCCESS"
+            
+            for chunk_idx, (chunk_start, chunk_end) in enumerate(hourly_chunks, 1):
+                chunk_start_str = chunk_start.strftime('%Y-%m-%dT%H:%M:%SZ')
+                chunk_end_str = chunk_end.strftime('%Y-%m-%dT%H:%M:%SZ')
+                
+                duration_minutes = (chunk_end - chunk_start).total_seconds() / 60
+                logger.info(f"Processing chunk {chunk_idx}/{len(hourly_chunks)}: {chunk_start.strftime('%Y-%m-%d %H:%M:%S')} to {chunk_end.strftime('%Y-%m-%d %H:%M:%S')} ({duration_minutes:.1f} minutes)")
+                
+                try:
+                    # Request orders for this chunk
+                    chunk_orders, chunk_details, status = self.order_requester.get_orders_for_time_range(
+                        access_token=access_token,
+                        start_date=chunk_start_str,
+                        end_date=chunk_end_str,
+                        ship_node_type=ship_node_type,
+                        limit=limit
+                    )
+                    
+                    # Handle token expiration
+                    if status == "TOKEN_EXPIRED":
+                        logger.warning("Access token expired, refreshing...")
+                        access_token = self._get_access_token(force_refresh=True)
+                        
+                        # Retry request
+                        chunk_orders, chunk_details, status = self.order_requester.get_orders_for_time_range(
+                            access_token=access_token,
+                            start_date=chunk_start_str,
+                            end_date=chunk_end_str,
+                            ship_node_type=ship_node_type,
+                            limit=limit
+                        )
+                    
+                    # Check status
+                    if status == "TOKEN_EXPIRED":
+                        error_msg = "Access token expired and refresh failed"
+                        logger.error(error_msg)
+                        stats['errors'].append(error_msg)
+                        overall_status = "ERROR"
+                        break
+                    elif status.startswith("ERROR"):
+                        error_msg = f"Failed to request orders for chunk {chunk_idx}: {status}"
+                        logger.error(error_msg)
+                        stats['errors'].append(error_msg)
+                        if overall_status == "SUCCESS":
+                            overall_status = status
+                        continue
+                    elif status == "NEED_SPLIT":
+                        # If chunk needs split, it means too many orders
+                        # For now, we'll log a warning and continue
+                        logger.warning(f"Chunk {chunk_idx} has too many orders (NEED_SPLIT), but continuing with available data")
+                        # Still merge available orders
+                        for order in chunk_orders:
+                            order_id = order.get('purchaseOrderId')
+                            if order_id and order_id not in all_order_details:
+                                all_order_list.append(order)
+                                all_order_details[order_id] = order
+                        continue
+                    elif status == "SUCCESS":
+                        # Merge chunk orders
+                        for order in chunk_orders:
+                            order_id = order.get('purchaseOrderId')
+                            if order_id and order_id not in all_order_details:
+                                all_order_list.append(order)
+                                all_order_details[order_id] = order
+                        
+                        # Merge order details
+                        for order_id, order_detail in chunk_details.items():
+                            if order_id not in all_order_details:
+                                all_order_details[order_id] = order_detail
+                        
+                        logger.info(f"  ✓ Chunk {chunk_idx} completed: {len(chunk_orders)} orders")
+                
+                except Exception as e:
+                    error_msg = f"Error processing chunk {chunk_idx}: {str(e)}"
+                    logger.error(error_msg)
+                    stats['errors'].append(error_msg)
+                    if overall_status == "SUCCESS":
+                        overall_status = f"ERROR: {str(e)}"
+                    continue
+            
+            # Check overall status
+            if overall_status.startswith("ERROR"):
+                error_msg = f"Failed to request orders: {overall_status}"
+                logger.error(error_msg)
+                stats['errors'].append(error_msg)
+                # Still try to push available orders
+            
+            stats['orders_requested'] = len(all_order_list)
+            logger.info(f"Total orders requested: {len(all_order_list)}")
             
             # Push to Kafka
-            if order_list:
-                orders_pushed = self._push_orders_to_kafka(order_list)
+            if all_order_list:
+                orders_pushed = self._push_orders_to_kafka(all_order_list)
                 stats['orders_pushed'] = orders_pushed
+                logger.info(f"Total orders pushed to Kafka: {orders_pushed}")
             else:
                 logger.warning("No orders to push to Kafka")
             
@@ -329,20 +481,35 @@ class WalmartOrderKafkaPusher:
         Request orders for a single day and push to Kafka
         
         Args:
-            date_str (str): Date string in format "YYYY-MM-DD"
+            date_str (str): Date string in format "YYYY-MM-DD" or "YYYY-MM-DD hh:mm:ss"
+                - "YYYY-MM-DD": Request full day (00:00:00 to 23:59:59)
+                - "YYYY-MM-DD hh:mm:ss": Request from specified time to end of day (23:59:59)
             ship_node_type (str, optional): Ship node type
             
         Returns:
             dict: Statistics about the operation
         """
-        start_date = f"{date_str}T00:00:00Z"
-        end_date = f"{date_str}T23:59:59Z"
+        # If input is date only, request full day
+        # If input is datetime, use it as start time and set end to 23:59:59
+        try:
+            dt, is_full_day = self._parse_date_input(date_str)
+            if is_full_day:
+                # Full day: use date_str as-is for both start and end
+                start_date = date_str
+                end_date = date_str
+            else:
+                # Datetime: use as start, set end to same day 23:59:59
+                start_date = date_str
+                end_date = dt.strftime("%Y-%m-%d 23:59:59")
+        except ValueError:
+            # Fallback: assume date only format
+            start_date = date_str
+            end_date = date_str
         
         return self.request_and_push_orders(
             start_date=start_date,
             end_date=end_date,
-            ship_node_type=ship_node_type,
-            auto_split=True
+            ship_node_type=ship_node_type
         )
     
     def request_and_push_date_range(self, start_date_str, end_date_str, 
@@ -351,65 +518,80 @@ class WalmartOrderKafkaPusher:
         Request orders for a date range and push to Kafka
         
         Args:
-            start_date_str (str): Start date string in format "YYYY-MM-DD"
-            end_date_str (str): End date string in format "YYYY-MM-DD"
+            start_date_str (str): Start date string in format "YYYY-MM-DD" or "YYYY-MM-DD hh:mm:ss"
+            end_date_str (str): End date string in format "YYYY-MM-DD" or "YYYY-MM-DD hh:mm:ss"
             ship_node_type (str, optional): Ship node type
             
         Returns:
             dict: Overall statistics
         """
-        start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
-        end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        # Parse input dates to determine if we need to process day by day
+        start_dt, start_is_full_day = self._parse_date_input(start_date_str)
+        end_dt, end_is_full_day = self._parse_date_input(end_date_str)
         
-        overall_stats = {
-            'start_time': datetime.now(),
-            'end_time': None,
-            'total_orders_requested': 0,
-            'total_orders_pushed': 0,
-            'days_processed': 0,
-            'days_failed': 0,
-            'errors': []
-        }
-        
-        current_date = start_date
-        while current_date <= end_date:
-            date_str = current_date.strftime("%Y-%m-%d")
-            logger.info("=" * 100)
-            logger.info(f"Processing date: {date_str}")
-            logger.info("=" * 100)
+        # If both are full days, process day by day
+        # Otherwise, process as single time range
+        if start_is_full_day and end_is_full_day:
+            # Process day by day (original behavior)
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
             
-            try:
-                stats = self.request_and_push_daily_orders(date_str, ship_node_type)
-                overall_stats['total_orders_requested'] += stats.get('orders_requested', 0)
-                overall_stats['total_orders_pushed'] += stats.get('orders_pushed', 0)
-                overall_stats['days_processed'] += 1
+            overall_stats = {
+                'start_time': datetime.now(),
+                'end_time': None,
+                'total_orders_requested': 0,
+                'total_orders_pushed': 0,
+                'days_processed': 0,
+                'days_failed': 0,
+                'errors': []
+            }
+            
+            current_date = start_date
+            while current_date <= end_date:
+                date_str = current_date.strftime("%Y-%m-%d")
+                logger.info("=" * 100)
+                logger.info(f"Processing date: {date_str}")
+                logger.info("=" * 100)
                 
-                if stats.get('errors'):
-                    overall_stats['errors'].extend(stats['errors'])
+                try:
+                    stats = self.request_and_push_daily_orders(date_str, ship_node_type)
+                    overall_stats['total_orders_requested'] += stats.get('orders_requested', 0)
+                    overall_stats['total_orders_pushed'] += stats.get('orders_pushed', 0)
+                    overall_stats['days_processed'] += 1
+                    
+                    if stats.get('errors'):
+                        overall_stats['errors'].extend(stats['errors'])
+                        overall_stats['days_failed'] += 1
+                    
+                except Exception as e:
+                    error_msg = f"Failed to process date {date_str}: {str(e)}"
+                    logger.error(error_msg)
+                    overall_stats['errors'].append(error_msg)
                     overall_stats['days_failed'] += 1
                 
-            except Exception as e:
-                error_msg = f"Failed to process date {date_str}: {str(e)}"
-                logger.error(error_msg)
-                overall_stats['errors'].append(error_msg)
-                overall_stats['days_failed'] += 1
+                current_date += timedelta(days=1)
             
-            current_date += timedelta(days=1)
-        
-        overall_stats['end_time'] = datetime.now()
-        overall_stats['duration'] = (overall_stats['end_time'] - overall_stats['start_time']).total_seconds()
-        
-        logger.info("=" * 100)
-        logger.info("Date range processing completed!")
-        logger.info(f"Date range: {start_date_str} to {end_date_str}")
-        logger.info(f"Total orders requested: {overall_stats['total_orders_requested']}")
-        logger.info(f"Total orders pushed: {overall_stats['total_orders_pushed']}")
-        logger.info(f"Days processed: {overall_stats['days_processed']}")
-        logger.info(f"Days failed: {overall_stats['days_failed']}")
-        logger.info(f"Duration: {overall_stats['duration']:.2f} seconds")
-        logger.info("=" * 100)
-        
-        return overall_stats
+            overall_stats['end_time'] = datetime.now()
+            overall_stats['duration'] = (overall_stats['end_time'] - overall_stats['start_time']).total_seconds()
+            
+            logger.info("=" * 100)
+            logger.info("Date range processing completed!")
+            logger.info(f"Date range: {start_date_str} to {end_date_str}")
+            logger.info(f"Total orders requested: {overall_stats['total_orders_requested']}")
+            logger.info(f"Total orders pushed: {overall_stats['total_orders_pushed']}")
+            logger.info(f"Days processed: {overall_stats['days_processed']}")
+            logger.info(f"Days failed: {overall_stats['days_failed']}")
+            logger.info(f"Duration: {overall_stats['duration']:.2f} seconds")
+            logger.info("=" * 100)
+            
+            return overall_stats
+        else:
+            # Process as single time range (will be split into hourly chunks)
+            return self.request_and_push_orders(
+                start_date=start_date_str,
+                end_date=end_date_str,
+                ship_node_type=ship_node_type
+            )
     
     def close(self):
         """Close Kafka connections"""
@@ -433,16 +615,46 @@ if __name__ == "__main__":
     )
     
     try:
-        # Example: Process single day
-        # date_str = "2025-10-03"
-        # stats = pusher.request_and_push_daily_orders(date_str)
-        # logger.info(f"Processing result: {stats}")
+        # Get orders from last 1 hour in Los Angeles timezone
+        # Set timezone to America/Los_Angeles (Pacific Time)
+        la_timezone = pytz.timezone('America/Los_Angeles')
         
-        # Example: Process date range
-        start_date_str = "2025-11-01"
-        end_date_str = "2025-11-01"
-        overall_stats = pusher.request_and_push_date_range(start_date_str, end_date_str)
-        logger.info(f"Overall processing result: {overall_stats}")
+        # Get current time in Los Angeles timezone
+        la_now = datetime.now(la_timezone)
+        
+        # Calculate 1 hour ago
+        la_1_hour_ago = la_now - timedelta(hours=1)
+        
+        # Convert to UTC for Walmart API (API expects UTC time in ISO format)
+        # Walmart API uses UTC timezone, so we need to convert LA time to UTC
+        la_now_utc = la_now.astimezone(pytz.UTC)
+        la_1_hour_ago_utc = la_1_hour_ago.astimezone(pytz.UTC)
+        
+        # Format for Walmart API: "YYYY-MM-DDTHH:MM:SSZ"
+        start_date = la_1_hour_ago_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_date = la_now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        logger.info("=" * 100)
+        logger.info("Requesting orders from last 1 hour")
+        logger.info(f"Los Angeles Time: {la_1_hour_ago.strftime('%Y-%m-%d %H:%M:%S %Z')} to {la_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        logger.info(f"UTC Time (API format): {start_date} to {end_date}")
+        logger.info("=" * 100)
+        
+        # Request and push orders
+        stats = pusher.request_and_push_orders(
+            start_date=start_date,
+            end_date=end_date,
+            ship_node_type=None,  # Request all types
+            limit=200
+        )
+        
+        logger.info("=" * 100)
+        logger.info("Processing completed!")
+        logger.info(f"Orders requested: {stats.get('orders_requested', 0)}")
+        logger.info(f"Orders pushed: {stats.get('orders_pushed', 0)}")
+        if stats.get('errors'):
+            logger.warning(f"Errors: {stats.get('errors')}")
+        logger.info("=" * 100)
         
     except Exception as e:
         logger.error(f"Exception occurred: {str(e)}")

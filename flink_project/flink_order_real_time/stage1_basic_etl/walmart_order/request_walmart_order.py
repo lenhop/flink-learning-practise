@@ -78,7 +78,12 @@ class WalmartOrderRequester:
         try:
             response = requests.get(url, headers=headers, timeout=60)
             response.raise_for_status()
-            return response.json()
+            order_data = response.json()
+            # Add request_time to order details
+            request_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if isinstance(order_data, dict):
+                order_data['request_time'] = request_time
+            return order_data
         except requests.exceptions.RequestException as e:
             raise Exception(f"Failed to get order details for {order_id}: {str(e)}")
     
@@ -165,12 +170,17 @@ class WalmartOrderRequester:
         meta = data['list'].get('meta', {})
         total_count = meta.get('totalCount', 0)
         
+        # Get current request time in format yyyy-MM-dd HH:mm:ss
+        request_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
         order_list = []
         order_details = {}
         for order in orders:
             if isinstance(order, dict):
                 order_id = order.get('purchaseOrderId')
                 if order_id:
+                    # Add request_time to each order
+                    order['request_time'] = request_time
                     order_list.append(order)
                     order_details[order_id] = order
         
@@ -393,7 +403,7 @@ if __name__ == "__main__":
     
     # Note: access_token should be obtained from token generator
     # This is just an example structure
-    access_token = 'eyJraWQiOiJmODI1ZDdmZi04NTFiLTQ5OWYtOTcxMi04NGRiODc2YWY4YWIiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiZGlyIn0..Q3rWlDvuYLsGB9zh.wH5K79vq3_3DHJe1U5NSSvBrMLkJoZI68tP7-sKB7vbdXmsQb3gxnjEvqBm-FsPFdbuPhhVuGXkKtXsUHPDpJNJTKu2xCfZvHNKQJKcQTeIurIRlLbiHBdj4JI7HldG322QadTUtSavV2T2vEPpSkJs9aPLwGGWv2EI-cmwYue_79UDFDeQRLB9RIcO4fJscAAVK7z4Cq3LOt3C1XJNzT7JxYu6IbmijZ5_ZaPFWDBijhsgvIupaY4WWuNNON4mfNgR2ztJA5Q_8kggeH4LzHOmAaNXpqFsXBoQW9pNXavB89BZZV6UWw2UDstqmyqH0Jn4c3T7P_-WeqUyicmvbpCsgfTKAbS2klKRKTv6nVyphuWqYV8QjWtebkNDItqz5my-4WTzYZm0-LQB3RW-uvwMU76eGLok3Mapw1nKeorddfmWqnLwuLnFNwH8KWFVmE7rZCxUSLBvDITi-WAUntCk6nyrQA2yaZwnotPvynSIVHzgmkwOla7-EXQXS8YP8R4pNHHn7UIyO_W96aYgF5nd0eKpMkFDgW32_0_JV74mcdw3pX0hyVgEgDyieVD6HP6sdL6oynavL3h1jOyMHvKfJ52h3oMc0lzRaE74BgA-KGgLJEozqOJXmuhtcfXfYBQfWR3Z86ZuCdBdQK4XBAZ7LipQ-QiqkyXl1zVFCUQW4upSD_5PKZJP114WY.BUIKT7f96SmkqE7KVHWW3g'
+    access_token = 'xxx'
     
     requester = WalmartOrderRequester()
     

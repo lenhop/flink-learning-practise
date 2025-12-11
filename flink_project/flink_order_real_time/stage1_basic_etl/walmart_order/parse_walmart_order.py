@@ -35,7 +35,8 @@ def parse_walmart_order(json_file_path):
                 'shipNode_type': ship_node.get('type') if ship_node else None,
                 'shipNode_name': ship_node.get('name') if ship_node else None,
                 'shipNode_id': ship_node.get('id') if ship_node else None,
-                'source_file': os.path.basename(json_file_path)  # 添加源文件信息
+                'source_file': os.path.basename(json_file_path),  # 添加源文件信息
+                'request_time': order.get('request_time')  # Extract request_time from order data
             }
             
             # 提取配送信息
@@ -235,7 +236,8 @@ def parse_walmart_order_json_string(json_str: str, source_file: Optional[str] = 
                     'shipNode_type': ship_node.get('type') if ship_node else None,
                     'shipNode_name': ship_node.get('name') if ship_node else None,
                     'shipNode_id': ship_node.get('id') if ship_node else None,
-                    'source_file': source_file or 'kafka_stream'
+                    'source_file': source_file or 'kafka_stream',
+                    'request_time': order.get('request_time')  # Extract request_time from order data
                 }
                 
                 # Extract shipping information
@@ -499,7 +501,11 @@ def convert_to_row_data(order_dict: dict) -> tuple:
         to_string(order_dict.get('carrierName'), 100),         # VARCHAR(100)
         to_string(order_dict.get('carrierMethodCode'), 50),     # VARCHAR(50)
         to_string(order_dict.get('trackingNumber'), 100),      # VARCHAR(100)
-        to_string(order_dict.get('trackingURL'), 500)          # VARCHAR(500)
+        to_string(order_dict.get('trackingURL'), 500),         # VARCHAR(500)
+        
+        # Data processing information (DATETIME, DATETIME)
+        parse_timestamp(order_dict.get('request_time')),       # DATETIME - request time
+        None                                                    # DATETIME - load_time (default CURRENT_TIMESTAMP)
     )
 
 

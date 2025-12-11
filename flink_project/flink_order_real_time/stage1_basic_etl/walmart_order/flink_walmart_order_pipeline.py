@@ -99,13 +99,14 @@ class WalmartOrderMySQLSink:
     
     def _build_insert_sql(self):
         """
-        Build INSERT SQL statement matching table structure
+        Build REPLACE SQL statement matching table structure
+        REPLACE will delete existing record with same primary key (purchaseOrderId, sku) and insert new one
         
         Returns:
-            str: INSERT SQL statement with placeholders
+            str: REPLACE SQL statement with placeholders
         """
         return f"""
-        INSERT INTO {self.table_name} (
+        REPLACE INTO {self.table_name} (
             purchaseOrderId, customerOrderId, customerEmailId, orderDate, orderDate_formatted,
             shipNode_type, shipNode_name, shipNode_id, source_file, phone,
             estimatedDeliveryDate, estimatedDeliveryDate_formatted, estimatedShipDate, estimatedShipDate_formatted, methodCode,
@@ -114,13 +115,15 @@ class WalmartOrderMySQLSink:
             statusDate, statusDate_formatted, fulfillmentOption, shipMethod, storeId, shippingProgramType,
             chargeType, chargeName, chargeAmount, currency, taxAmount, taxName,
             orderLineStatus, statusQuantity, cancellationReason,
-            shipDateTime, shipDateTime_formatted, carrierName, carrierMethodCode, trackingNumber, trackingURL
+            shipDateTime, shipDateTime_formatted, carrierName, carrierMethodCode, trackingNumber, trackingURL,
+            request_time, load_time
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s
         )
         """
     
@@ -162,7 +165,8 @@ class WalmartOrderMySQLSink:
     
     def insert_record(self, value):
         """
-        Insert a single record into MySQL table
+        Insert or replace a single record into MySQL table
+        Uses REPLACE INTO which will delete existing record with same primary key (purchaseOrderId, sku) and insert new one
         
         Args:
             value: Record data (tuple, Row object, or list)
@@ -178,7 +182,7 @@ class WalmartOrderMySQLSink:
             connection = self._connect()
             cursor = connection.cursor()
             
-            # Execute INSERT
+            # Execute REPLACE (will replace existing record with same primary key)
             cursor.execute(self.insert_sql, params)
             connection.commit()
             
@@ -355,18 +359,23 @@ def main():
             traceback.print_exc()
             raise
     
+    logger.info("Setting parallelism to 1...")
     env.set_parallelism(1)
+    logger.info("✓ Parallelism set to 1")
     
     # Configure execution mode
     try:
         # Set checkpointing interval (optional, for fault tolerance)
+        logger.info("Enabling checkpointing...")
         env.enable_checkpointing(60000)  # 60 seconds
-        logger.info("Checkpointing enabled (interval: 60s)")
+        logger.info("✓ Checkpointing enabled (interval: 60s)")
     except Exception as e:
         logger.warning(f"Could not enable checkpointing: {e}")
     
     # Create source utils
+    logger.info("Creating FlinkSourceUtils instance...")
     source_utils = FlinkSourceUtils()
+    logger.info("✓ FlinkSourceUtils created")
     
     # Step 1: Create Kafka source
     logger.info("Step 1: Creating Kafka source...")
@@ -456,7 +465,11 @@ def main():
         Types.STRING(),         # carrierName VARCHAR(100)
         Types.STRING(),         # carrierMethodCode VARCHAR(50)
         Types.STRING(),         # trackingNumber VARCHAR(100)
-        Types.STRING()          # trackingURL VARCHAR(500)
+        Types.STRING(),         # trackingURL VARCHAR(500)
+        
+        # Data processing information (2 fields)
+        Types.SQL_TIMESTAMP(),  # request_time DATETIME
+        Types.SQL_TIMESTAMP()   # load_time DATETIME (default CURRENT_TIMESTAMP)
     ]))
     
     # Step 4: Create MySQL sink function using MySQL sink class
