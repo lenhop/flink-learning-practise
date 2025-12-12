@@ -75,7 +75,7 @@ def build_env_and_jars(config):
     # Step 2: add jars (Kafka mandatory, MySQL optional)
     jar_dir = os.path.join(flink_project_path, 'jar')
     FlinkJarManager.add_kafka_jars(env, jar_dir, logger=logger)
-    FlinkJarManager.add_mysql_jars(env, jar_dir, logger=logger)
+    # FlinkJarManager.add_mysql_jars(env, jar_dir, logger=logger)  # temporarily disabled to avoid JVM module access error
 
     # Step 3: configure parameters
     FlinkParameterConfigurator.configure_parallelism(env, parallelism=1, logger=logger)

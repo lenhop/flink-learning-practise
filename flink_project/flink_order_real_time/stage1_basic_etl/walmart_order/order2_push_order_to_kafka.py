@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Step 2: 将订单推送到 Kafka（仅负责 Kafka 相关）。
+Step 2: 将订单推送到 Kafka(仅负责 Kafka 相关）。
 """
 
 import logging

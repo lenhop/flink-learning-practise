@@ -173,6 +173,10 @@ class WalmartOrderRequester:
         return chunks
 
     def get_orders_with_auto_split(self, access_token, start_date, end_date, ship_node_type=None, limit=200):
+        logger.info(
+            "Start requesting orders: start=%s end=%s ship_node_type=%s limit=%s",
+            start_date, end_date, ship_node_type, limit
+        )
         start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
         end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
         hourly_chunks = []
@@ -183,16 +187,26 @@ class WalmartOrderRequester:
                 current_end = end_dt
             hourly_chunks.append((current_start, current_end))
             current_start = current_end
+        logger.info("Hour chunks to process: %s", len(hourly_chunks))
 
         all_order_list = []
         all_order_details = {}
         overall_status = "SUCCESS"
 
         for hour_start, hour_end in hourly_chunks:
+            logger.info(
+                "Processing hour chunk: %s -> %s",
+                hour_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                hour_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+            )
             hour_start_str = hour_start.strftime("%Y-%m-%dT%H:%M:%SZ")
             hour_end_str = hour_end.strftime("%Y-%m-%dT%H:%M:%SZ")
             hour_orders, hour_details, status = self.get_orders_for_time_range(
                 access_token, hour_start_str, hour_end_str, ship_node_type, limit
+            )
+            logger.info(
+                "Hour chunk status=%s orders=%s unique_total=%s",
+                status, len(hour_orders), len(all_order_details)
             )
             if status == "TOKEN_EXPIRED":
                 return [], {}, "TOKEN_EXPIRED"
@@ -202,8 +216,14 @@ class WalmartOrderRequester:
                 continue
 
             if status == "NEED_SPLIT":
+                logger.info("Need split for hour chunk, splitting into 10-minute chunks")
                 ten_minute_chunks = self._split_time_range(hour_start, hour_end, 6)
                 for chunk_start, chunk_end in ten_minute_chunks:
+                    logger.info(
+                        "Processing 10-minute chunk: %s -> %s",
+                        chunk_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        chunk_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    )
                     chunk_start_str = chunk_start.strftime("%Y-%m-%dT%H:%M:%SZ")
                     chunk_end_str = chunk_end.strftime("%Y-%m-%dT%H:%M:%SZ")
                     chunk_orders, chunk_details, chunk_status = self.get_orders_for_time_range(
@@ -226,6 +246,10 @@ class WalmartOrderRequester:
                         for order_id, order_detail in chunk_details.items():
                             if order_id not in all_order_details:
                                 all_order_details[order_id] = order_detail
+                        logger.info(
+                            "10-minute chunk success: added=%s cumulative=%s",
+                            len(chunk_orders), len(all_order_details)
+                        )
             elif status == "SUCCESS":
                 for order in hour_orders:
                     order_id = order.get('purchaseOrderId')
@@ -235,6 +259,10 @@ class WalmartOrderRequester:
                 for order_id, order_detail in hour_details.items():
                     if order_id not in all_order_details:
                         all_order_details[order_id] = order_detail
+                logger.info(
+                    "Hour chunk success: added=%s cumulative=%s",
+                    len(hour_orders), len(all_order_details)
+                )
 
         return all_order_list, all_order_details, overall_status
 
@@ -270,6 +298,10 @@ class OrderRequestService:
         """调用 requester 的自动拆分获取订单。返回 (orders, details, status)。"""
         limit = limit or self.limit
         access_token = self._get_access_token()
+        logger.info(
+            "Request with auto split: start=%s end=%s ship_node_type=%s limit=%s",
+            start_date, end_date, ship_node_type, limit
+        )
         orders, details, status = self.requester.get_orders_with_auto_split(
             access_token=access_token,
             start_date=start_date,
