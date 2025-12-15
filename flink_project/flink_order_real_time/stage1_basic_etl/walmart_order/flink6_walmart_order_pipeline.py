@@ -236,9 +236,12 @@ def build_pipeline(env, config):
     # Parse JSON and convert to rows
     def parse_order_json(json_str):
         try:
+            logger.info(f"Parsing message (length: {len(json_str)})")
             tuples = parse_walmart_order_json_string_to_tuples(json_str)
-            logger.info(f"Parsed {len(tuples)} records from message")
-            for t in tuples:
+            logger.info(f"✓ Parsed {len(tuples)} records from message")
+            
+            for idx, t in enumerate(tuples):
+                logger.info(f"  Processing record {idx+1}/{len(tuples)}: order={t[0]}, sku={t[24]}")
                 # Convert tuple to Row object for JDBC
                 row = Row(
                     # Order basic information (5 fields)
@@ -315,9 +318,12 @@ def build_pipeline(env, config):
                     t[50],  # request_time
                     t[51]   # load_time
                 )
+                logger.info(f"  ✓ Row created with {len(row)} fields, yielding to JDBC sink")
                 yield row
         except Exception as e:
-            logger.error(f"Parse error: {e}")
+            logger.error(f"❌ Parse error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     # Convert to proper row format
     row_stream = raw_stream.flat_map(parse_order_json, output_type=get_row_type_info())
@@ -357,7 +363,7 @@ def build_pipeline(env, config):
         orderLineStatus, statusQuantity, cancellationReason,
         shipDateTime, shipDateTime_formatted, carrierName, carrierMethodCode, trackingNumber, trackingURL,
         request_time, load_time
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
     
     jdbc_sink = JdbcSink.sink(
         insert_sql,
