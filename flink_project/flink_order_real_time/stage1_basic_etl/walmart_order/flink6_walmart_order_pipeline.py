@@ -26,15 +26,11 @@ if stage1_parent_path not in sys.path:
     sys.path.insert(0, stage1_parent_path)
 
 from config.config import BaseConfig  # noqa: E402
+from stage1_basic_etl.walmart_order.flink1_create_filnk_env import FlinkEnvironmentSetup  # noqa: E402
 from stage1_basic_etl.walmart_order.flink2_add_jar_to_flink import FlinkJarManager  # noqa: E402
 from stage1_basic_etl.walmart_order.flink3_add_parameter_to_flink import FlinkParameterConfigurator  # noqa: E402
 from stage1_basic_etl.walmart_order.flink4_build_source import FlinkSourceBuilder  # noqa: E402
-from stage1_basic_etl.walmart_order.flink5_parse_walmart_order import parse_walmart_order_json_string_to_tuples  # noqa: E402
-
-from pyflink.common import Types, Row
-from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.common import Configuration
-from pyflink.datastream.connectors.jdbc import JdbcSink, JdbcConnectionOptions, JdbcExecutionOptions
+from stage1_basic_etl.walmart_order.flink5_process_and_sink_jdbc import FlinkProcessAndSinkJDBC  # noqa: E402
 
 # 日志配置
 log_dir = os.path.join(flink_project_path, 'logs')
@@ -71,15 +67,14 @@ def load_config():
 
 
 def build_env_and_jars(config):
-    # Step 1: create env (FORCE LOCAL MODE to avoid remote cluster hanging)
+    # Step 1: create env using FlinkEnvironmentSetup (FORCE LOCAL MODE to avoid remote cluster hanging)
     logger.info("Step 1: Creating Flink execution environment...")
-    logger.info("Creating Flink environment in FORCED LOCAL MODE...")
     sys.stdout.flush()
-    flink_config = Configuration()
-    # Don't set jobmanager address - force local mode
-    logger.info("  Calling StreamExecutionEnvironment.get_execution_environment()...")
-    sys.stdout.flush()
-    env = StreamExecutionEnvironment.get_execution_environment(flink_config)
+    env_setup = FlinkEnvironmentSetup(
+        flink_project_path=flink_project_path,
+        force_local_mode=True
+    )
+    env = env_setup.create_and_get_environment()
     logger.info("✓ Step 1 completed: Flink environment created")
     sys.stdout.flush()
 
@@ -142,87 +137,20 @@ def build_env_and_jars(config):
 
 
 
-def get_row_type_info():
-    """Define the row type matching MySQL table structure."""
-    return Types.ROW([
-        # Order basic information (5 fields)
-        Types.LONG(),           # purchaseOrderId BIGINT
-        Types.LONG(),           # customerOrderId BIGINT
-        Types.STRING(),         # customerEmailId VARCHAR(100)
-        Types.LONG(),           # orderDate BIGINT
-        Types.SQL_TIMESTAMP(),  # orderDate_formatted TIMESTAMP
-
-        # Ship node information (3 fields)
-        Types.STRING(),         # shipNode_type VARCHAR(50)
-        Types.STRING(),         # shipNode_name VARCHAR(100)
-        Types.STRING(),         # shipNode_id VARCHAR(50)
-
-        # Data source information (2 fields)
-        Types.STRING(),         # source_file VARCHAR(100)
-        Types.STRING(),         # phone VARCHAR(20)
-
-        # Estimated delivery information (5 fields)
-        Types.LONG(),           # estimatedDeliveryDate BIGINT
-        Types.SQL_TIMESTAMP(),  # estimatedDeliveryDate_formatted TIMESTAMP
-        Types.LONG(),           # estimatedShipDate BIGINT
-        Types.SQL_TIMESTAMP(),  # estimatedShipDate_formatted TIMESTAMP
-        Types.STRING(),         # methodCode VARCHAR(50)
-
-        # Recipient address information (8 fields)
-        Types.STRING(),         # recipient_name VARCHAR(100)
-        Types.STRING(),         # address1 VARCHAR(200)
-        Types.STRING(),         # address2 VARCHAR(200)
-        Types.STRING(),         # city VARCHAR(100)
-        Types.STRING(),         # state VARCHAR(50)
-        Types.STRING(),         # postalCode VARCHAR(20)
-        Types.STRING(),         # country VARCHAR(10)
-        Types.STRING(),         # addressType VARCHAR(20)
-
-        # Order line item information (6 fields)
-        Types.INT(),            # lineNumber INT
-        Types.STRING(),         # sku VARCHAR(50)
-        Types.STRING(),         # productName TEXT
-        Types.STRING(),         # product_condition VARCHAR(50)
-        Types.INT(),            # quantity INT
-        Types.STRING(),         # unitOfMeasurement VARCHAR(20)
-
-        # Order status information (6 fields)
-        Types.LONG(),           # statusDate BIGINT
-        Types.SQL_TIMESTAMP(),  # statusDate_formatted TIMESTAMP
-        Types.STRING(),         # fulfillmentOption VARCHAR(50)
-        Types.STRING(),         # shipMethod VARCHAR(50)
-        Types.STRING(),         # storeId VARCHAR(50)
-        Types.STRING(),         # shippingProgramType VARCHAR(50)
-
-        # Charge information (6 fields)
-        Types.STRING(),         # chargeType VARCHAR(50)
-        Types.STRING(),         # chargeName VARCHAR(100)
-        Types.DOUBLE(),         # chargeAmount DECIMAL(10,2)
-        Types.STRING(),         # currency VARCHAR(10)
-        Types.DOUBLE(),         # taxAmount DECIMAL(10,2)
-        Types.STRING(),         # taxName VARCHAR(50)
-
-        # Order line status information (3 fields)
-        Types.STRING(),         # orderLineStatus VARCHAR(50)
-        Types.INT(),            # statusQuantity INT
-        Types.STRING(),         # cancellationReason VARCHAR(200)
-
-        # Shipping information (6 fields)
-        Types.LONG(),           # shipDateTime BIGINT
-        Types.SQL_TIMESTAMP(),  # shipDateTime_formatted TIMESTAMP
-        Types.STRING(),         # carrierName VARCHAR(100)
-        Types.STRING(),         # carrierMethodCode VARCHAR(50)
-        Types.STRING(),         # trackingNumber VARCHAR(100)
-        Types.STRING(),         # trackingURL VARCHAR(500)
-
-        # Data processing information (2 fields)
-        Types.SQL_TIMESTAMP(),  # request_time DATETIME
-        Types.SQL_TIMESTAMP()   # load_time DATETIME
-    ])
+# Row type info is now provided by FlinkProcessAndSinkJDBC class
 
 
 def build_pipeline(env, config):
-    # Build source
+    """
+    Build the complete Flink pipeline using modular components.
+    
+    Steps:
+    1. Create Kafka source
+    2. Parse and convert data using FlinkProcessAndSinkJDBC
+    3. Connect JDBC sink to MySQL
+    """
+    # Step 1: Build Kafka source
+    logger.info("Building Kafka source...")
     source_builder = FlinkSourceBuilder(env, logger=logger)
     kafka_cfg = config["kafka"]
     kafka_source = source_builder.create_kafka_source(
@@ -232,149 +160,26 @@ def build_pipeline(env, config):
         offset=kafka_cfg["offset"]
     )
     raw_stream = source_builder.create_data_stream(kafka_source, source_name="Kafka Source")
+    logger.info("✓ Kafka source created")
 
-    # Parse JSON and convert to rows
-    def parse_order_json(json_str):
-        try:
-            logger.info(f"Parsing message (length: {len(json_str)})")
-            tuples = parse_walmart_order_json_string_to_tuples(json_str)
-            logger.info(f"✓ Parsed {len(tuples)} records from message")
-            
-            for idx, t in enumerate(tuples):
-                logger.info(f"  Processing record {idx+1}/{len(tuples)}: order={t[0]}, sku={t[24]}")
-                # Convert tuple to Row object for JDBC
-                row = Row(
-                    # Order basic information (5 fields)
-                    t[0],   # purchaseOrderId
-                    t[1],   # customerOrderId
-                    t[2],   # customerEmailId
-                    t[3],   # orderDate
-                    t[4],   # orderDate_formatted
-                    
-                    # Ship node information (3 fields)
-                    t[5],   # shipNode_type
-                    t[6],   # shipNode_name
-                    t[7],   # shipNode_id
-                    
-                    # Data source information (2 fields)
-                    t[8],   # source_file
-                    t[9],   # phone
-                    
-                    # Estimated delivery information (5 fields)
-                    t[10],  # estimatedDeliveryDate
-                    t[11],  # estimatedDeliveryDate_formatted
-                    t[12],  # estimatedShipDate
-                    t[13],  # estimatedShipDate_formatted
-                    t[14],  # methodCode
-                    
-                    # Recipient address information (8 fields)
-                    t[15],  # recipient_name
-                    t[16],  # address1
-                    t[17],  # address2
-                    t[18],  # city
-                    t[19],  # state
-                    t[20],  # postalCode
-                    t[21],  # country
-                    t[22],  # addressType
-                    
-                    # Order line item information (6 fields)
-                    t[23],  # lineNumber
-                    t[24],  # sku
-                    t[25],  # productName
-                    t[26],  # product_condition
-                    t[27],  # quantity
-                    t[28],  # unitOfMeasurement
-                    
-                    # Order status information (6 fields)
-                    t[29],  # statusDate
-                    t[30],  # statusDate_formatted
-                    t[31],  # fulfillmentOption
-                    t[32],  # shipMethod
-                    t[33],  # storeId
-                    t[34],  # shippingProgramType
-                    
-                    # Charge information (6 fields)
-                    t[35],  # chargeType
-                    t[36],  # chargeName
-                    t[37],  # chargeAmount
-                    t[38],  # currency
-                    t[39],  # taxAmount
-                    t[40],  # taxName
-                    
-                    # Order line status information (3 fields)
-                    t[41],  # orderLineStatus
-                    t[42],  # statusQuantity
-                    t[43],  # cancellationReason
-                    
-                    # Shipping information (6 fields)
-                    t[44],  # shipDateTime
-                    t[45],  # shipDateTime_formatted
-                    t[46],  # carrierName
-                    t[47],  # carrierMethodCode
-                    t[48],  # trackingNumber
-                    t[49],  # trackingURL
-                    
-                    # Data processing information (2 fields)
-                    t[50],  # request_time
-                    t[51]   # load_time
-                )
-                logger.info(f"  ✓ Row created with {len(row)} fields, yielding to JDBC sink")
-                yield row
-        except Exception as e:
-            logger.error(f"❌ Parse error: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-    # Convert to proper row format
-    row_stream = raw_stream.flat_map(parse_order_json, output_type=get_row_type_info())
-    logger.info("✓ Parse & convert configured")
-
-    # Build JDBC sink
-    mysql_cfg = config["mysql"]
+    # Step 2 & 3: Parse, convert and sink using FlinkProcessAndSinkJDBC
+    logger.info("Setting up data processing and JDBC sink...")
+    processor = FlinkProcessAndSinkJDBC(env, logger=logger)
     
-    # JDBC connection options
-    # NOTE: rewriteBatchedStatements=true is CRITICAL for batch insert performance
-    # Without it, Flink JDBC sink may not properly execute batch inserts
-    jdbc_conn_opts = JdbcConnectionOptions.JdbcConnectionOptionsBuilder() \
-        .with_driver_name("com.mysql.cj.jdbc.Driver") \
-        .with_url(f"jdbc:mysql://{mysql_cfg['host']}:{mysql_cfg['port']}/{mysql_cfg['database']}?useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true") \
-        .with_user_name(mysql_cfg['user']) \
-        .with_password(mysql_cfg['password']) \
-        .build()
+    # Parse and convert JSON to Row objects
+    row_stream = processor.parse_and_convert(raw_stream)
     
-    # JDBC execution options
-    # Using smaller batch size and interval for better reliability
-    # Since data comes one row at a time, use smaller batch size to flush more frequently
-    jdbc_exec_opts = JdbcExecutionOptions.builder() \
-        .with_batch_size(10) \
-        .with_batch_interval_ms(1000) \
-        .with_max_retries(3) \
-        .build()
-    
-    # Create JDBC sink with REPLACE INTO statement
-    insert_sql = """REPLACE INTO walmart_order (
-        purchaseOrderId, customerOrderId, customerEmailId, orderDate, orderDate_formatted,
-        shipNode_type, shipNode_name, shipNode_id, source_file, phone,
-        estimatedDeliveryDate, estimatedDeliveryDate_formatted, estimatedShipDate, estimatedShipDate_formatted, methodCode,
-        recipient_name, address1, address2, city, state, postalCode, country, addressType,
-        lineNumber, sku, productName, product_condition, quantity, unitOfMeasurement,
-        statusDate, statusDate_formatted, fulfillmentOption, shipMethod, storeId, shippingProgramType,
-        chargeType, chargeName, chargeAmount, currency, taxAmount, taxName,
-        orderLineStatus, statusQuantity, cancellationReason,
-        shipDateTime, shipDateTime_formatted, carrierName, carrierMethodCode, trackingNumber, trackingURL,
-        request_time, load_time
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
-    
-    jdbc_sink = JdbcSink.sink(
-        insert_sql,
-        get_row_type_info(),
-        jdbc_conn_opts,
-        jdbc_exec_opts
+    # Connect JDBC sink with optimized batch settings
+    # Using smaller batch size (10) and interval (1000ms) for better reliability
+    # rewriteBatchedStatements=true is included in the sink builder for performance
+    processor.connect_jdbc_sink(
+        row_stream=row_stream,
+        mysql_config=config["mysql"],
+        batch_size=10,
+        batch_interval_ms=1000,
+        max_retries=3
     )
-    
-    # Add sink to stream
-    row_stream.add_sink(jdbc_sink)
-    logger.info("✓ JDBC sink configured")
+    logger.info("✓ Pipeline configured successfully")
 
     return env
 
