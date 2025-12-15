@@ -250,3 +250,58 @@ docker exec flink-jobmanager-mysql ls -la /opt/flink/lib/custom/
 
 
 
+
+### 11. Docker Flink 容器中 Python 环境的配置与使用
+
+#### 容器内 Python 环境配置
+
+**1. 基础配置**
+- Flink 镜像已包含 Python 3.10 环境
+- 通常在 
+- 通过  环境变量指定 Python 可执行文件
+
+**2. 脚本目录挂载**
+- 通过  挂载本地 Python 脚本
+- 脚本中可包含自定义 Python 库、依赖包等
+
+**3. 实际配置查看**
+
+/opt/conda/lib/python310.zip
+/opt/conda/lib/python3.10
+/opt/conda/lib/python3.10/lib-dynload
+/opt/conda/lib/python3.10/site-packages
+
+Python: /opt/conda/bin/python
+
+可用包:
+
+当前工作目录:
+
+JAR 文件目录:
+custom
+flink-cep-1.17.0.jar
+flink-connector-files-1.17.0.jar
+flink-csv-1.17.0.jar
+flink-dist-1.17.0.jar
+flink-json-1.17.0.jar
+flink-scala_2.12-1.17.0.jar
+flink-table-api-java-uber-1.17.0.jar
+flink-table-planner-loader-1.17.0.jar
+flink-table-runtime-1.17.0.jar
+log4j-1.2-api-2.17.1.jar
+log4j-api-2.17.1.jar
+log4j-core-2.17.1.jar
+log4j-slf4j-impl-2.17.1.jar
+
+#### PyFlink 作业提交方式
+
+**远程模式**：
+- PyFlink 客户端通过 RPC 提交作业到容器内的 Flink 集群
+- 无需在客户端管理 JAR 文件，容器会自动加载 
+
+#### 最佳实践
+
+1. **开发环境**：推荐使用本地模式，JAR 文件放在本地
+2. **生产环境**：推荐使用远程模式，JAR 文件通过 Docker volume 挂载
+3. **混合模式**：代码自动检测并切换，方便开发调试
+

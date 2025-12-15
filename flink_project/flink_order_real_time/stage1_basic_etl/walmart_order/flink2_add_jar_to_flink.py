@@ -81,6 +81,41 @@ class FlinkJarManager:
                 logger.info(f"Added MySQL JAR to Flink env: {uri}")
 
     @classmethod
+    def add_jdbc_jars(cls, env: StreamExecutionEnvironment, jdbc_jar_path, mysql_jar_path, logger=None):
+        """
+        将 JDBC connector 和 MySQL driver JAR 添加到 Flink StreamExecutionEnvironment 中
+        
+        Args:
+            env: Flink StreamExecutionEnvironment
+            jdbc_jar_path: Path to Flink JDBC connector JAR (e.g., flink-connector-jdbc-3.1.1-1.17.jar)
+            mysql_jar_path: Path to MySQL driver JAR (e.g., mysql-connector-java-8.0.28.jar)
+            logger: Optional logger instance
+        """
+        jar_uris = []
+        
+        # Add JDBC connector JAR (mandatory for JDBC sink)
+        jdbc_uri = cls._ensure_jar(jdbc_jar_path, logger=logger, mandatory=True)
+        if jdbc_uri:
+            jar_uris.append(jdbc_uri)
+            if logger:
+                logger.info(f"✓ Added JDBC JAR: {os.path.basename(jdbc_jar_path)}")
+        
+        # Add MySQL driver JAR (mandatory for MySQL connection)
+        mysql_uri = cls._ensure_jar(mysql_jar_path, logger=logger, mandatory=True)
+        if mysql_uri:
+            jar_uris.append(mysql_uri)
+            if logger:
+                logger.info(f"✓ Added MySQL JAR: {os.path.basename(mysql_jar_path)}")
+        
+        # Add all JARs to environment
+        if jar_uris:
+            env.add_jars(*jar_uris)
+            if logger:
+                logger.info(f"Added JDBC-related JARs to Flink env: {len(jar_uris)}")
+        
+        return jar_uris
+
+    @classmethod
     def add_jars_to_env(cls, env: StreamExecutionEnvironment, jar_dir, jar_name=None, clients_jar_name=None, logger=None):
         """
         将 Kafka 相关 JAR 直接 add 到 Flink StreamExecutionEnvironment 中

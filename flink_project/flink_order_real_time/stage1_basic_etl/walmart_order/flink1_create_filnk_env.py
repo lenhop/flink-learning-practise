@@ -17,15 +17,23 @@ from pyflink.datastream import StreamExecutionEnvironment
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Also configure to use the same logger as the main pipeline for consistency
+def setup_logger(external_logger=None):
+    """Allow external logger to be used instead of module logger."""
+    global logger
+    if external_logger:
+        logger = external_logger
+
 
 class FlinkEnvironmentSetup:
     """Flink execution environment setup (only creation)."""
 
-    def __init__(self, flink_project_path, jobmanager_host='localhost', jobmanager_port=6123):
+    def __init__(self, flink_project_path, jobmanager_host='localhost', jobmanager_port=6123, force_local_mode=False):
         self.flink_project_path = flink_project_path
         self.env = None
         self.jobmanager_host = jobmanager_host
         self.jobmanager_port = jobmanager_port
+        self.force_local_mode = force_local_mode
 
     def _check_flink_cluster(self):
         """Check if Flink cluster is accessible."""
@@ -43,11 +51,17 @@ class FlinkEnvironmentSetup:
         Create and configure Flink execution environment.
         """
         try:
-            logger.info("Creating Flink execution environment...")
+            if self.force_local_mode:
+                logger.info("Creating Flink environment in FORCED LOCAL MODE...")
+            else:
+                logger.info("Creating Flink execution environment...")
 
             flink_config = Configuration()
 
-            if self._check_flink_cluster():
+            if self.force_local_mode:
+                # Force local mode - don't set jobmanager address
+                logger.info("Force local mode enabled, skipping cluster check")
+            elif self._check_flink_cluster():
                 logger.info("Flink cluster detected, using remote mode")
                 flink_config.set_string("jobmanager.address", self.jobmanager_host)
                 flink_config.set_string("jobmanager.rpc.port", str(self.jobmanager_port))

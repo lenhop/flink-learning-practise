@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Flink Walmart Order Pipeline (using Flink JDBC instead of pymysql)
+Flink Walmart Order Pipeline V2 (using Flink JDBC instead of pymysql)
 
 流程：
-1) 创建执行环境
-2) 加载 Kafka/MySQL 所需 JAR (including JDBC)
-3) 配置并行度与 checkpoint
-4) 创建 Kafka Source 并生成 DataStream
-5) 解析订单并使用 Flink JDBC 写入 MySQL
+1) flink1_create_filnk_env: 创建执行环境
+2) flink2_add_jar_to_flink: 加载 Kafka/MySQL 所需 JAR (including JDBC)
+3) flink3_add_parameter_to_flink: 配置并行度与 checkpoint
+4) flink4_build_source: 创建 Kafka Source 并生成 DataStream
+5) flink5_process_and_sink_jdbc: 解析订单并使用 Flink JDBC 写入 MySQL
 """
 
 import logging
@@ -26,20 +26,19 @@ if stage1_parent_path not in sys.path:
     sys.path.insert(0, stage1_parent_path)
 
 from config.config import BaseConfig  # noqa: E402
+from stage1_basic_etl.walmart_order.flink1_create_filnk_env import FlinkEnvironmentSetup  # noqa: E402
 from stage1_basic_etl.walmart_order.flink2_add_jar_to_flink import FlinkJarManager  # noqa: E402
 from stage1_basic_etl.walmart_order.flink3_add_parameter_to_flink import FlinkParameterConfigurator  # noqa: E402
 from stage1_basic_etl.walmart_order.flink4_build_source import FlinkSourceBuilder  # noqa: E402
 from stage1_basic_etl.walmart_order.flink5_parse_walmart_order import parse_walmart_order_json_string_to_tuples  # noqa: E402
 
 from pyflink.common import Types, Row
-from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.common import Configuration
 from pyflink.datastream.connectors.jdbc import JdbcSink, JdbcConnectionOptions, JdbcExecutionOptions
 
 # 日志配置
 log_dir = os.path.join(flink_project_path, 'logs')
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, 'flink6_walmart_order_pipeline.log')
+log_file = os.path.join(log_dir, 'flink6_walmart_order_pipeline_v2.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -56,8 +55,8 @@ def load_config():
         "kafka": {
             "bootstrap_servers": kafka_cfg.get('bootstrap_servers', ['localhost:29092', 'localhost:39092']),
             "topic": 'walmart_order_raw',
-            "consumer_group_id": 'flink-walmart-order-pipeline-jdbc',
-            "offset": 'latest',  # 从最新的消息开始消费，避免重复处理
+            "consumer_group_id": 'flink-walmart-order-pipeline-v2',
+            "offset": 'latest',  # 从最新的消息开始消费
         },
         "mysql": {
             "host": mysql_cfg.get('host', 'localhost'),
@@ -72,74 +71,46 @@ def load_config():
 
 def build_env_and_jars(config):
     # Step 1: create env (FORCE LOCAL MODE to avoid remote cluster hanging)
-    logger.info("Step 1: Creating Flink execution environment...")
+    from pyflink.datastream import StreamExecutionEnvironment
+    from pyflink.common import Configuration
+    
     logger.info("Creating Flink environment in FORCED LOCAL MODE...")
-    sys.stdout.flush()
     flink_config = Configuration()
     # Don't set jobmanager address - force local mode
-    logger.info("  Calling StreamExecutionEnvironment.get_execution_environment()...")
-    sys.stdout.flush()
     env = StreamExecutionEnvironment.get_execution_environment(flink_config)
-    logger.info("✓ Step 1 completed: Flink environment created")
-    sys.stdout.flush()
 
     # Step 2: add jars (Kafka + JDBC + MySQL driver)
-    logger.info("Step 2: Loading JAR files...")
-    sys.stdout.flush()
     jar_dir = os.path.join(flink_project_path, 'jar')
     jar_17_dir = os.path.join(jar_dir, '1.17')
     
-    logger.info(f"  JAR directory: {jar_dir}")
-    logger.info(f"  Flink 1.17 JAR directory: {jar_17_dir}")
-    sys.stdout.flush()
-    
-    # Add Kafka JARs using FlinkJarManager (same as old working version)
-    logger.info("  Loading Kafka JARs...")
-    sys.stdout.flush()
+    # Add Kafka JARs
     FlinkJarManager.add_kafka_jars(env, jar_17_dir, 
                                    jar_name='flink-connector-kafka-3.1.0-1.17.jar',
                                    clients_jar_name='../kafka-clients-3.4.1.jar', 
                                    logger=logger)
-    logger.info("  ✓ Kafka JARs loaded")
-    sys.stdout.flush()
     
     # Add JDBC JARs
-    logger.info("  Loading JDBC JARs...")
-    sys.stdout.flush()
     jdbc_jar = os.path.join(jar_17_dir, 'flink-connector-jdbc-3.1.1-1.17.jar')
     mysql_jar = os.path.join(jar_dir, 'mysql-connector-java-8.0.28.jar')
     
     if os.path.exists(jdbc_jar):
         env.add_jars(f"file://{os.path.abspath(jdbc_jar)}")
-        logger.info(f"  ✓ Added JDBC JAR: {os.path.basename(jdbc_jar)}")
+        logger.info(f"✓ Added JDBC JAR: {os.path.basename(jdbc_jar)}")
     else:
-        logger.error(f"  ✗ JDBC JAR missing: {jdbc_jar}")
-    sys.stdout.flush()
+        logger.error(f"✗ JDBC JAR missing: {jdbc_jar}")
         
     if os.path.exists(mysql_jar):
         env.add_jars(f"file://{os.path.abspath(mysql_jar)}")
-        logger.info(f"  ✓ Added MySQL JAR: {os.path.basename(mysql_jar)}")
+        logger.info(f"✓ Added MySQL JAR: {os.path.basename(mysql_jar)}")
     else:
-        logger.error(f"  ✗ MySQL JAR missing: {mysql_jar}")
-    logger.info("✓ Step 2 completed: All JARs loaded")
-    sys.stdout.flush()
+        logger.error(f"✗ MySQL JAR missing: {mysql_jar}")
 
-    # Step 3: configure parameters using FlinkParameterConfigurator
-    logger.info("Step 3: Configuring Flink parameters...")
-    sys.stdout.flush()
+    # Step 3: configure parameters
     FlinkParameterConfigurator.configure_parallelism(env, parallelism=1, logger=logger)
-    sys.stdout.flush()
-    checkpoint_dir = os.path.join(flink_project_path, 'checkpoints', 'walmart_order_pipeline')
-    # Use shorter checkpoint interval to ensure data is committed more frequently
-    FlinkParameterConfigurator.configure_checkpointing(env, checkpoint_dir=checkpoint_dir, interval_ms=10000, logger=logger)
-    logger.info("✓ Step 3 completed: Parameters configured")
-    sys.stdout.flush()
+    checkpoint_dir = os.path.join(flink_project_path, 'checkpoints', 'walmart_order_pipeline_v2')
+    FlinkParameterConfigurator.configure_checkpointing(env, checkpoint_dir=checkpoint_dir, interval_ms=60000, logger=logger)
 
-    logger.info("✓ Environment and JARs ready")
-    sys.stdout.flush()
     return env
-
-
 
 
 def get_row_type_info():
@@ -327,21 +298,17 @@ def build_pipeline(env, config):
     mysql_cfg = config["mysql"]
     
     # JDBC connection options
-    # NOTE: rewriteBatchedStatements=true is CRITICAL for batch insert performance
-    # Without it, Flink JDBC sink may not properly execute batch inserts
     jdbc_conn_opts = JdbcConnectionOptions.JdbcConnectionOptionsBuilder() \
         .with_driver_name("com.mysql.cj.jdbc.Driver") \
-        .with_url(f"jdbc:mysql://{mysql_cfg['host']}:{mysql_cfg['port']}/{mysql_cfg['database']}?useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true") \
+        .with_url(f"jdbc:mysql://{mysql_cfg['host']}:{mysql_cfg['port']}/{mysql_cfg['database']}?useSSL=false&allowPublicKeyRetrieval=true") \
         .with_user_name(mysql_cfg['user']) \
         .with_password(mysql_cfg['password']) \
         .build()
     
     # JDBC execution options
-    # Using smaller batch size and interval for better reliability
-    # Since data comes one row at a time, use smaller batch size to flush more frequently
     jdbc_exec_opts = JdbcExecutionOptions.builder() \
-        .with_batch_size(10) \
-        .with_batch_interval_ms(1000) \
+        .with_batch_size(100) \
+        .with_batch_interval_ms(5000) \
         .with_max_retries(3) \
         .build()
     
@@ -374,62 +341,24 @@ def build_pipeline(env, config):
 
 
 def main():
-    import sys
     try:
         logger.info("=" * 100)
-        logger.info("Flink Walmart Order Pipeline (JDBC) - Starting")
+        logger.info("Flink Walmart Order Pipeline V2 (JDBC) - Starting")
         logger.info("=" * 100)
-        sys.stdout.flush()
 
-        logger.info("Loading configuration...")
-        sys.stdout.flush()
         config = load_config()
-        logger.info("✓ Configuration loaded")
-        sys.stdout.flush()
-
-        logger.info("Building Flink environment and loading JARs...")
-        sys.stdout.flush()
         env = build_env_and_jars(config)
-        logger.info("✓ Environment and JARs ready")
-        sys.stdout.flush()
-
-        logger.info("Building pipeline...")
-        sys.stdout.flush()
         env = build_pipeline(env, config)
-        logger.info("✓ Pipeline built")
-        sys.stdout.flush()
 
         logger.info("=" * 100)
         logger.info("Pipeline: Kafka -> Parse -> JDBC -> MySQL")
+        logger.info("Press Ctrl+C to stop")
         logger.info("=" * 100)
-        logger.info("Starting Flink job execution...")
-        logger.info("NOTE: The job will run continuously and wait for incoming data from Kafka")
-        logger.info("      Data will be processed automatically as it arrives")
-        logger.info("=" * 100)
-        sys.stdout.flush()
-        
-        logger.info("Calling env.execute() - this may take a moment to initialize...")
-        logger.info("  Flink will start the job and wait for data from Kafka")
-        logger.info("  If you see this message, the job is starting...")
-        sys.stdout.flush()
-        
-        try:
-            logger.info("  [DEBUG] About to call env.execute()...")
-            sys.stdout.flush()
-            env.execute("Flink6 Walmart Order Pipeline (JDBC)")
-            logger.info("Job execution completed (this should not appear unless job stops)")
-        except Exception as execute_error:
-            logger.error(f"Error during env.execute(): {execute_error}")
-            logger.error(f"Error type: {type(execute_error).__name__}")
-            sys.stdout.flush()
-            traceback.print_exc()
-            raise
+        env.execute("Flink6 Walmart Order Pipeline V2 (JDBC)")
     except KeyboardInterrupt:
         logger.info("Job interrupted by user")
-        sys.stdout.flush()
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
-        sys.stdout.flush()
         traceback.print_exc()
         raise
 

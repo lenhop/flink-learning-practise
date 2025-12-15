@@ -45,16 +45,44 @@ class FlinkParameterConfigurator:
 
         env.enable_checkpointing(interval_ms)
 
+        # Configure checkpoint storage - works better in cluster mode
         try:
             checkpoint_config = env.get_checkpoint_config()
-            checkpoint_config.set_checkpoint_storage(f"file://{checkpoint_dir}")
-            if logger:
-                logger.info(f"✓ Checkpoint storage configured: file://{checkpoint_dir}")
+            checkpoint_storage_set = False
+            
+            # Method 1: Try set_checkpoint_storage with string (works in cluster mode)
+            try:
+                if hasattr(checkpoint_config, 'set_checkpoint_storage'):
+                    checkpoint_config.set_checkpoint_storage(f"file://{checkpoint_dir}")
+                    checkpoint_storage_set = True
+                    if logger:
+                        logger.info(f"✓ Checkpoint storage configured: file://{checkpoint_dir}")
+            except (AttributeError, TypeError) as e1:
+                if logger:
+                    logger.debug(f"set_checkpoint_storage method failed: {e1}")
+            
+            # Method 2: Try using environment configuration (alternative method)
+            if not checkpoint_storage_set:
+                try:
+                    env_config = env.get_config()
+                    if hasattr(env_config, 'set_string'):
+                        env_config.set_string("state.checkpoints.dir", f"file://{checkpoint_dir}")
+                        checkpoint_storage_set = True
+                        if logger:
+                            logger.info(f"✓ Checkpoint storage configured via config: file://{checkpoint_dir}")
+                except Exception as e2:
+                    if logger:
+                        logger.debug(f"Config method failed: {e2}")
+            
+            if not checkpoint_storage_set:
+                if logger:
+                    logger.warning("Could not configure checkpoint storage using standard methods")
+                    logger.warning("  Checkpoints will use default storage")
+                    logger.warning("  In cluster mode, this should still work for JDBC sink")
         except Exception as e:
             if logger:
                 logger.warning(f"Could not configure checkpoint storage: {e}")
-                logger.warning("  Checkpoints may be stored in temporary location")
-                logger.warning("  Consider using Flink cluster mode for persistent checkpoints")
+                logger.warning("  Checkpoints may use default storage")
 
         if logger:
             logger.info(f"✓ Checkpointing enabled (interval: {interval_ms/1000}s)")
