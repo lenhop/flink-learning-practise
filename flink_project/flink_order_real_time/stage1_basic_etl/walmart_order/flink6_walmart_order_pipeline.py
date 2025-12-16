@@ -124,7 +124,6 @@ def build_env_and_jars(config):
     
     # Add JDBC JARs
     logger.info("  Loading JDBC JARs...")
-    print("", flush=True)
     jdbc_jar = os.path.join(jar_17_dir, 'flink-connector-jdbc-3.1.1-1.17.jar')
     mysql_jar = os.path.join(jar_dir, 'mysql-connector-java-8.0.28.jar')
     
@@ -139,10 +138,10 @@ def build_env_and_jars(config):
         logger.info(f"  ✓ Added MySQL JAR: {os.path.basename(mysql_jar)}")
     else:
         logger.error(f"  ✗ MySQL JAR missing: {mysql_jar}")
-    log_with_print("✓ Step 2 completed: All JARs loaded", separator=True)
+    log_with_print("✓ Step 2 completed: All JARs loaded")
 
     # Step 3: configure parameters using FlinkParameterConfigurator
-    log_with_print("Step 3: Configuring Flink parameters...")
+    log_with_print("Step 3: Configuring Flink parameters...", separator=True)
     FlinkParameterConfigurator.configure_parallelism(env, parallelism=1, logger=logger)
     checkpoint_dir = os.path.join(flink_project_path, 'checkpoints', 'walmart_order_pipeline')
     # Use shorter checkpoint interval to ensure data is committed more frequently
@@ -231,10 +230,8 @@ def main():
         log_with_print("Pipeline: Kafka -> Parse -> JDBC -> MySQL")
         log_with_print("=" * 100)
         log_with_print("Starting Flink job execution...")
-        logger.info("NOTE: The job will run continuously and wait for incoming data from Kafka")
-        logger.info("      Data will be processed automatically as it arrives")
-        logger.info("=" * 100)
-        sys.stdout.flush()
+        log_with_print("NOTE: The job will run continuously, processing data as it arrives from Kafka.")
+        log_with_print("      To stop the job, press Ctrl+C.")
         
         logger.info("Calling env.execute() - this may take a moment to initialize...")
         logger.info("  Flink will start the job and wait for data from Kafka")
