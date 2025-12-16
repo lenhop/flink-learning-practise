@@ -82,7 +82,7 @@ class FlinkSourceBuilder:
             self.logger.info("Step 4.2: Creating data stream from source...")
             wm = watermark_strategy if watermark_strategy is not None else WatermarkStrategy.no_watermarks()
             raw_stream = self.env.from_source(source, wm, source_name)
-            self.logger.info(" Data stream created successfully")
+            self.logger.info("✓ Data stream created successfully")
             return raw_stream
         except Exception as e:
             self.logger.error(f"Failed to create data stream: {e}")

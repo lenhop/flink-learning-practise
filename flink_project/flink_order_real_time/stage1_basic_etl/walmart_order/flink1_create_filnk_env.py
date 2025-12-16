@@ -6,6 +6,7 @@ Split from flink_walmart_order_pipeline.py. Only responsible for creating Stream
 """
 
 import os
+import sys
 import socket
 import traceback
 import logging
@@ -71,6 +72,12 @@ class FlinkEnvironmentSetup:
 
             logger.info("Calling StreamExecutionEnvironment.get_execution_environment()...")
             self.env = StreamExecutionEnvironment.get_execution_environment(flink_config)
+            
+            # PyFlink 劫持了 logging，需要重新配置 logging handlers
+            for handler in logging.root.handlers:
+                if isinstance(handler, logging.StreamHandler):
+                    handler.flush()
+                    
             logger.info("✓ StreamExecutionEnvironment created successfully")
 
             return self.env

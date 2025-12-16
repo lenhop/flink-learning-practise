@@ -220,8 +220,6 @@ class ParseAndConvertFlatMap(FlatMapFunction):
             self.processed_count += len(tuples)
             if self.processed_count == 1 or self.processed_count % 10 == 0:
                 self.logger.info(f"Processing data: received {self.processed_count} order line(s) so far...")
-                import sys
-                sys.stdout.flush()
             rows_yielded = 0
             for t in tuples:
                 # Convert tuple to Row object for JDBC sink
@@ -306,14 +304,10 @@ class ParseAndConvertFlatMap(FlatMapFunction):
                 yield row
             if rows_yielded > 0 and (self.processed_count == 1 or self.processed_count % 100 == 0):
                 self.logger.info(f"  -> Yielded {rows_yielded} row(s) to JDBC sink for this batch")
-                import sys
-                sys.stdout.flush()
         except Exception as e:
             self.logger.error(f"Error parsing order data: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
-            import sys
-            sys.stdout.flush()
             raise
 
 

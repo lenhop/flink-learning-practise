@@ -10,6 +10,7 @@ Usage:
 """
 
 import os
+import sys
 
 from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.common.restart_strategy import RestartStrategies

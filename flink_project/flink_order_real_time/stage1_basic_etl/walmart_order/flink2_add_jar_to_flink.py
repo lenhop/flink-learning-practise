@@ -14,6 +14,7 @@ Usage:
 """
 
 import os
+import sys
 
 from pyflink.datastream import StreamExecutionEnvironment
 

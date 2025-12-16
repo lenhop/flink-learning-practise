@@ -32,16 +32,45 @@ from stage1_basic_etl.walmart_order.flink3_add_parameter_to_flink import FlinkPa
 from stage1_basic_etl.walmart_order.flink4_build_source import FlinkSourceBuilder  # noqa: E402
 from stage1_basic_etl.walmart_order.flink5_process_and_sink_jdbc import FlinkProcessAndSinkJDBC  # noqa: E402
 
-# 日志配置
+# 日志配置 - 配置立即刷新以避免日志缓冲
+# 使用 PYTHONUNBUFFERED 环境变量或 python -u 标志效果更好
 log_dir = os.path.join(flink_project_path, 'logs')
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, 'flink6_walmart_order_pipeline.log')
+
+# 创建自定义 StreamHandler 强制立即刷新
+class FlushStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()  # Force flush after each log
+
+file_handler = logging.FileHandler(log_file)
+stream_handler = FlushStreamHandler(sys.stdout)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler(log_file), logging.StreamHandler()]
+    handlers=[file_handler, stream_handler]
 )
 logger = logging.getLogger(__name__)
+
+
+def log_with_print(msg, level="INFO", separator=False):
+    """Helper function to log and print simultaneously (PyFlink hijacks logging)"""
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S,') + str(datetime.now().microsecond)[:3]
+    
+    if separator:
+        # 在步骤之间添加分隔线
+        print(f"{timestamp} - {level} - " + "=" * 80, flush=True)
+    
+    print(f"{timestamp} - {level} - {msg}", flush=True)
+    if level == "INFO":
+        logger.info(msg)
+    elif level == "WARNING":
+        logger.warning(msg)
+    elif level == "ERROR":
+        logger.error(msg)
 
 
 def load_config():
@@ -75,32 +104,27 @@ def build_env_and_jars(config):
         force_local_mode=True
     )
     env = env_setup.create_and_get_environment()
-    logger.info("✓ Step 1 completed: Flink environment created")
-    sys.stdout.flush()
+    log_with_print("✓ Step 1 completed: Flink environment created", separator=True)
 
     # Step 2: add jars (Kafka + JDBC + MySQL driver)
-    logger.info("Step 2: Loading JAR files...")
-    sys.stdout.flush()
+    log_with_print("Step 2: Loading JAR files...")
     jar_dir = os.path.join(flink_project_path, 'jar')
     jar_17_dir = os.path.join(jar_dir, '1.17')
     
     logger.info(f"  JAR directory: {jar_dir}")
     logger.info(f"  Flink 1.17 JAR directory: {jar_17_dir}")
-    sys.stdout.flush()
     
     # Add Kafka JARs using FlinkJarManager (same as old working version)
     logger.info("  Loading Kafka JARs...")
-    sys.stdout.flush()
     FlinkJarManager.add_kafka_jars(env, jar_17_dir, 
                                    jar_name='flink-connector-kafka-3.1.0-1.17.jar',
                                    clients_jar_name='../kafka-clients-3.4.1.jar', 
                                    logger=logger)
-    logger.info("  ✓ Kafka JARs loaded")
-    sys.stdout.flush()
+    log_with_print("  ✓ Kafka JARs loaded")
     
     # Add JDBC JARs
     logger.info("  Loading JDBC JARs...")
-    sys.stdout.flush()
+    print("", flush=True)
     jdbc_jar = os.path.join(jar_17_dir, 'flink-connector-jdbc-3.1.1-1.17.jar')
     mysql_jar = os.path.join(jar_dir, 'mysql-connector-java-8.0.28.jar')
     
@@ -109,29 +133,22 @@ def build_env_and_jars(config):
         logger.info(f"  ✓ Added JDBC JAR: {os.path.basename(jdbc_jar)}")
     else:
         logger.error(f"  ✗ JDBC JAR missing: {jdbc_jar}")
-    sys.stdout.flush()
         
     if os.path.exists(mysql_jar):
         env.add_jars(f"file://{os.path.abspath(mysql_jar)}")
         logger.info(f"  ✓ Added MySQL JAR: {os.path.basename(mysql_jar)}")
     else:
         logger.error(f"  ✗ MySQL JAR missing: {mysql_jar}")
-    logger.info("✓ Step 2 completed: All JARs loaded")
-    sys.stdout.flush()
+    log_with_print("✓ Step 2 completed: All JARs loaded", separator=True)
 
     # Step 3: configure parameters using FlinkParameterConfigurator
-    logger.info("Step 3: Configuring Flink parameters...")
-    sys.stdout.flush()
+    log_with_print("Step 3: Configuring Flink parameters...")
     FlinkParameterConfigurator.configure_parallelism(env, parallelism=1, logger=logger)
-    sys.stdout.flush()
     checkpoint_dir = os.path.join(flink_project_path, 'checkpoints', 'walmart_order_pipeline')
     # Use shorter checkpoint interval to ensure data is committed more frequently
     FlinkParameterConfigurator.configure_checkpointing(env, checkpoint_dir=checkpoint_dir, interval_ms=10000, logger=logger)
-    logger.info("✓ Step 3 completed: Parameters configured")
-    sys.stdout.flush()
-
-    logger.info("✓ Environment and JARs ready")
-    sys.stdout.flush()
+    log_with_print("✓ Step 3 completed: Parameters configured")
+    log_with_print("✓ Environment and JARs ready", separator=True)
     return env
 
 
@@ -150,7 +167,7 @@ def build_pipeline(env, config):
     3. Connect JDBC sink to MySQL
     """
     # Step 1: Build Kafka source
-    logger.info("Building Kafka source...")
+    log_with_print("Building Kafka source...")
     source_builder = FlinkSourceBuilder(env, logger=logger)
     kafka_cfg = config["kafka"]
     kafka_source = source_builder.create_kafka_source(
@@ -160,14 +177,15 @@ def build_pipeline(env, config):
         offset=kafka_cfg["offset"]
     )
     raw_stream = source_builder.create_data_stream(kafka_source, source_name="Kafka Source")
-    logger.info("✓ Kafka source created")
+    log_with_print("✓ Kafka source created")
 
     # Step 2 & 3: Parse, convert and sink using FlinkProcessAndSinkJDBC
-    logger.info("Setting up data processing and JDBC sink...")
+    log_with_print("Setting up data processing and JDBC sink...")
     processor = FlinkProcessAndSinkJDBC(env, logger=logger)
     
     # Parse and convert JSON to Row objects
     row_stream = processor.parse_and_convert(raw_stream)
+    log_with_print("✓ Step 4 completed: Parse & convert configured", separator=True)
     
     # Connect JDBC sink with optimized batch settings
     # Using smaller batch size (10) and interval (1000ms) for better reliability
@@ -179,7 +197,8 @@ def build_pipeline(env, config):
         batch_interval_ms=1000,
         max_retries=3
     )
-    logger.info("✓ Pipeline configured successfully")
+    log_with_print("✓ Step 5 completed: JDBC sink connected", separator=True)
+    log_with_print("✓ Step 6 completed: Pipeline configured successfully", separator=True)
 
     return env
 
@@ -204,16 +223,14 @@ def main():
         logger.info("✓ Environment and JARs ready")
         sys.stdout.flush()
 
-        logger.info("Building pipeline...")
-        sys.stdout.flush()
+        log_with_print("Building pipeline...")
         env = build_pipeline(env, config)
-        logger.info("✓ Pipeline built")
-        sys.stdout.flush()
+        log_with_print("✓ Pipeline built")
 
-        logger.info("=" * 100)
-        logger.info("Pipeline: Kafka -> Parse -> JDBC -> MySQL")
-        logger.info("=" * 100)
-        logger.info("Starting Flink job execution...")
+        log_with_print("=" * 100)
+        log_with_print("Pipeline: Kafka -> Parse -> JDBC -> MySQL")
+        log_with_print("=" * 100)
+        log_with_print("Starting Flink job execution...")
         logger.info("NOTE: The job will run continuously and wait for incoming data from Kafka")
         logger.info("      Data will be processed automatically as it arrives")
         logger.info("=" * 100)
